@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
+      # Resolving the review threads of copies that are gone needs contents: write.
+      contents: write
       pull-requests: write
     strategy:
       fail-fast: false
@@ -36,7 +38,7 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
-      - uses: LucaCappelletti94/cargo-echoes@fe825077e5322a8bd3fa82c8c5a55f2d49cbe016 # v1.10.2
+      - uses: LucaCappelletti94/cargo-echoes@14ca2c9fa250b4eb8cd59c47f187b1f2281fb484 # v1.10.4
         with:
           mode: post
           payload: ${{ runner.temp }}/echoes-payload
