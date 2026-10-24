@@ -58,22 +58,8 @@ pub fn generate_foreign_key_impls(
             }
 
             for group in extract_same_as_columns(other_field)? {
-                // Check for disambiguators in the group
-                // A disambiguator is a path with a single segment that matches
-                // the current field name. If there are any
-                // single-segment paths in the group, at least
-                // one must match `field_name`.
-                let disambiguators: Vec<_> =
-                    group.iter().filter(|p| p.segments.len() == 1).collect();
-
-                if !disambiguators.is_empty() {
-                    let matches_current_field = disambiguators
-                        .iter()
-                        .any(|p| p.segments.first().is_some_and(|s| s.ident == *field_name));
-
-                    if !matches_current_field {
-                        continue;
-                    }
+                if !disambiguators_match_field(&group, field_name) {
+                    continue;
                 }
 
                 for ref_col in group {
@@ -441,20 +427,8 @@ fn collect_triangular_foreign_keys<'a>(
             }
 
             for group in extract_same_as_columns(other_field)? {
-                // Check disambiguators: if there are single-segment paths in
-                // the group, at least one must match the
-                // current field name
-                let disambiguators: Vec<_> =
-                    group.iter().filter(|p| p.segments.len() == 1).collect();
-
-                if !disambiguators.is_empty() {
-                    let matches_current_field = disambiguators
-                        .iter()
-                        .any(|p| p.segments.first().is_some_and(|s| s.ident == *field_name));
-
-                    if !matches_current_field {
-                        continue;
-                    }
+                if !disambiguators_match_field(&group, field_name) {
+                    continue;
                 }
 
                 for ref_col in group {
@@ -539,6 +513,15 @@ fn collect_explicit_foreign_keys<'a>(
         });
     }
     Ok(())
+}
+
+/// Checks whether a group's disambiguators allow the group to apply. A
+/// disambiguator is a path with a single segment. When a group has
+/// disambiguators, at least one of them must match `field_name`.
+fn disambiguators_match_field(group: &[syn::Path], field_name: &Ident) -> bool {
+    let mut disambiguators = group.iter().filter(|p| p.segments.len() == 1).peekable();
+    disambiguators.peek().is_none()
+        || disambiguators.any(|p| p.segments.first().is_some_and(|s| s.ident == *field_name))
 }
 
 /// Formats a referenced-column path as its `table::column` grouping label.
