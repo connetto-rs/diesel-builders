@@ -1,0 +1,36 @@
+---
+name: refquiem-post
+
+"on":
+  workflow_run: # zizmor: ignore[dangerous-triggers] the job reads only the scan's payload
+    workflows: [refquiem]
+    types: [completed]
+
+permissions: {}
+
+# This job holds a write token, so it never checks out or runs pull request
+# code. The action posts only to the open pull request whose head the scan built.
+jobs:
+  post:
+    name: Post the review
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: refquiem-payload
+          path: ${{ runner.temp }}/refquiem-payload
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - uses: LucaCappelletti94/cargo-refquiem@bacf8060022d8357e428bf19f031b8347f5f9d35 # v0.2.1
+        with:
+          mode: post
+          payload: ${{ runner.temp }}/refquiem-payload
