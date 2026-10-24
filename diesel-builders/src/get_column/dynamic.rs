@@ -149,6 +149,49 @@ mod sealed {
         ) -> Result<Option<&VT>, DynamicColumnError>;
     }
 
+    /// The outcome of matching a dynamic column against the head column of
+    /// the model.
+    enum HeadColumnMatch<'a, VT> {
+        /// The head column does not match.
+        Miss,
+        /// The head column matched. `None` when it holds no value.
+        Matched(Option<&'a VT>),
+    }
+
+    /// Matches `column` against the head column of the model.
+    ///
+    /// Returns `HeadColumnMatch::Matched` when the column name, table name,
+    /// and value type all agree and the value is either absent or of type
+    /// `VT`. Anything else returns `HeadColumnMatch::Miss`, so the caller moves
+    /// on to the remaining columns.
+    fn take_dynamic_column<'a, M, CHead, VT>(
+        model: &'a M,
+        column: &DynColumn<VT>,
+    ) -> HeadColumnMatch<'a, VT>
+    where
+        M: GetColumn<CHead>,
+        CHead: TypedColumn<Table: TableExt> + 'static,
+        CHead::ColumnType: 'static,
+        VT: 'static,
+    {
+        if column.column_name() == CHead::NAME
+            && column.table_name() == <CHead::Table as TableExt>::TABLE_NAME
+            && core::any::TypeId::of::<VT>() == core::any::TypeId::of::<CHead::ValueType>()
+        {
+            let Some(value) = model.get_column_ref().as_optional_ref() else {
+                return HeadColumnMatch::Matched(None);
+            };
+
+            let value_any: &dyn core::any::Any = value;
+            match value_any.downcast_ref::<VT>() {
+                Some(value) => HeadColumnMatch::Matched(Some(value)),
+                None => HeadColumnMatch::Miss,
+            }
+        } else {
+            HeadColumnMatch::Miss
+        }
+    }
+
     impl<M, CHead> VariadicTryGetDynamicColumn<(CHead,)> for M
     where
         M: GetColumn<CHead>,
@@ -160,18 +203,8 @@ mod sealed {
             &self,
             column: DynColumn<VT>,
         ) -> Result<Option<&VT>, DynamicColumnError> {
-            if column.column_name() == CHead::NAME
-                && column.table_name() == <CHead::Table as TableExt>::TABLE_NAME
-                && core::any::TypeId::of::<VT>() == core::any::TypeId::of::<CHead::ValueType>()
-            {
-                let Some(value) = self.get_column_ref().as_optional_ref() else {
-                    return Ok(None);
-                };
-
-                let value_any: &dyn core::any::Any = value;
-                if let Some(value) = value_any.downcast_ref::<VT>() {
-                    return Ok(Some(value));
-                }
+            if let HeadColumnMatch::Matched(value) = take_dynamic_column(self, &column) {
+                return Ok(value);
             }
             Err(DynamicColumnError::UnknownColumn {
                 table_name: column.table_name(),
@@ -193,18 +226,8 @@ mod sealed {
             &self,
             column: DynColumn<VT>,
         ) -> Result<Option<&VT>, DynamicColumnError> {
-            if column.column_name() == CHead::NAME
-                && column.table_name() == <CHead::Table as TableExt>::TABLE_NAME
-                && core::any::TypeId::of::<VT>() == core::any::TypeId::of::<CHead::ValueType>()
-            {
-                let Some(value) = self.get_column_ref().as_optional_ref() else {
-                    return Ok(None);
-                };
-
-                let value_any: &dyn core::any::Any = value;
-                if let Some(value) = value_any.downcast_ref::<VT>() {
-                    return Ok(Some(value));
-                }
+            if let HeadColumnMatch::Matched(value) = take_dynamic_column(self, &column) {
+                return Ok(value);
             }
 
             <Self as VariadicTryGetDynamicColumn<CTail>>::variadic_try_get_dynamic_column(
