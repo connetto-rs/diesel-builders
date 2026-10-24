@@ -1,0 +1,42 @@
+---
+name: refquiem
+
+"on":
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refquiem-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Prepares the review with no write token, so fork pull requests are scanned
+# too. refquiem-post.yml posts it.
+jobs:
+  scan:
+    name: refquiem
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # One scan of the root workspace, since every refquiem review replaces the
+      # previous one on the pull request.
+      - uses: LucaCappelletti94/cargo-refquiem@bacf8060022d8357e428bf19f031b8347f5f9d35 # v0.2.1
+        id: refquiem
+        with:
+          version: 0.2.1
+          pr-number: ${{ github.event.pull_request.number }}
+          mode: prepare
+          payload: ${{ runner.temp }}/refquiem-payload
+
+      - if: steps.refquiem.outputs.review-status == 'prepared'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: refquiem-payload
+          path: ${{ runner.temp }}/refquiem-payload
+          retention-days: 7
+          if-no-files-found: error
