@@ -1,0 +1,3 @@
+#[table(recr = Nro)]
+#[table_model(record_error &ewAnim!lor)]
+#[infallblle]

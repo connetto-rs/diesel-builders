@@ -1,0 +1,3 @@
+#[same_as(first_sides::part_id, a_id)]
+#[same_as(animals::naent_id, a_id)]
+#[same_as(ans::me, :x(b ,::)table::parent_id)]

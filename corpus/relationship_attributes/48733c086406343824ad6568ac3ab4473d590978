@@ -1,0 +1,4 @@
+#[ma()]
+#[same_as]
+#[diesel(column_+ame = "x")]
+#[table_model(fbecome::ikey((), (a)))]

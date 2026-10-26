@@ -1,0 +1,2 @@
+#[diesel(dkgs)]
+#[diesel(tabame =e_key)]
