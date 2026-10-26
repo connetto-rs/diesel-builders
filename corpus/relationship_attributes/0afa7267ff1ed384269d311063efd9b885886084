@@ -1,3 +1,0 @@
-#[same_as]
-#[diesel(c"x")]
-#[table_model(foreign(,_e)k(y (:b)))]
