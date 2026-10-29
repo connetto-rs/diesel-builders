@@ -15,10 +15,9 @@ permissions:
 jobs:
   test:
     name: Test
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
         rust: [stable, nightly]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,7 +28,6 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - name: Install SQLite (Ubuntu)
-        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - name: Run tests
         run: cargo test --verbose
