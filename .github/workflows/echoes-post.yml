@@ -38,7 +38,7 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
-      - uses: LucaCappelletti94/cargo-echoes@14ca2c9fa250b4eb8cd59c47f187b1f2281fb484 # v1.10.4
+      - uses: LucaCappelletti94/cargo-echoes@9d3e3917cbfde54b75a50204df645e33d8274b59 # v1.11.0
         with:
           mode: post
           payload: ${{ runner.temp }}/echoes-payload
