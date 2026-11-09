@@ -18,7 +18,7 @@ The targets source-include the derive modules from `diesel-builders-derive` so t
 
 ## Seed corpus
 
-`fuzz/seeds/<target>/` holds the committed starting corpus. One input per file, in that target's encoding, plus a `<target>.options` file that carries the `[libfuzzer]` `max_len` cap. `.clusterfuzzlite/build.sh` zips each directory into `<target>_seed_corpus.zip` and fails the build when a target has no seeds or no options.
+`fuzz/seeds/<target>/` holds the committed starting corpus. One input per file, in that target's encoding, plus a `<target>.options` file that carries the `[libfuzzer]` `max_len` cap.
 
 Decode a `table_model` seed or crash input into model source with `cargo run --manifest-path fuzz/Cargo.toml --example decode_model -- <input-path>`. The `table_model` byte budget is `max_len = 2048`.
 
@@ -37,7 +37,3 @@ A bounded run of one target, with a scratch corpus directory:
 cargo fuzz run -O --debug-assertions --fuzz-dir fuzz table_model \
   fuzz/corpus/table_model fuzz/seeds/table_model -max_total_time=600 -rss_limit_mb=2560
 ```
-
-## ClusterFuzzLite wiring
-
-`.clusterfuzzlite/Dockerfile` pins the `base-builder-rust` image by digest and installs `cargo-fuzz 0.13.2`. `build.sh` builds with `CARGO_BUILD_JOBS=2` and copies each binary, options file, and seed zip to `$OUT`. The `cflite_batch.yml` and `cflite_prune.yml` workflows run batch fuzzing and corpus pruning against the `fuzz-corpus` storage branch on Monday, each with manual dispatch available.
