@@ -5,8 +5,20 @@ on:
     - cron: '0 0 * * 0' # Advisory databases move between weekly runs.
   push:
     branches: [main]
+    paths:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - deny.toml
+      - .cargo/audit.toml
+      - .github/workflows/security.yml
   pull_request:
     branches: [main]
+    paths:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - deny.toml
+      - .cargo/audit.toml
+      - .github/workflows/security.yml
 
 env:
   CARGO_TERM_COLOR: always
