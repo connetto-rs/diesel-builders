@@ -4,31 +4,26 @@
 [![Security Audit](https://github.com/connetto-rs/diesel-builders/workflows/Security%20Audit/badge.svg)](https://github.com/connetto-rs/diesel-builders/actions)
 [![Codecov](https://codecov.io/gh/connetto-rs/diesel-builders/branch/main/graph/badge.svg)](https://codecov.io/gh/connetto-rs/diesel-builders)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Crates.io](https://img.shields.io/crates/v/diesel-builders.svg)](https://crates.io/crates/diesel-builders)
+[![Docs](https://docs.rs/diesel-builders/badge.svg)](https://docs.rs/diesel-builders)
 
 A type-safe builder pattern library for [Diesel](https://diesel.rs) handling complex table relationships (inheritance chains, DAGs, triangular dependencies) with compile-time guarantees for insertion order and referential integrity. It provides fluent APIs for getting/setting column values and associated builders and models, executing foreign key queries, and [`serde`](https://github.com/serde-rs/serde) support.
 
-Requires Rust `1.88` and the upstream `main` branches of `diesel` and `tuplities`. Registry publication requires compatible releases of both dependencies.
+Requires Rust `1.88`.
 
 Tuple-size features select the maximum tuple arity. `size-32` is enabled by default, and disabling all size features limits tuples to eight elements.
 
-[Custom Diesel types](diesel-builders/tests/test_custom_type.rs) and [tables with multi-column primary keys](diesel-builders/tests/test_composite_primary_key.rs) are fully supported. The builder pattern works seamlessly with custom SQL and Rust types [that implement the required Diesel traits](https://github.com/diesel-rs/diesel/blob/main/guide_drafts/custom_types.md).
+[Custom Diesel types](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_custom_type.rs) and [tables with multi-column primary keys](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_composite_primary_key.rs) are supported, as are custom SQL and Rust types [that implement the required Diesel traits](https://github.com/diesel-rs/diesel/blob/main/guide_drafts/custom_types.md).
 
-[Composite-key inheritance](diesel-builders/tests/test_composite_inheritance.rs) propagates the complete ancestor key and joins every component. Set key components through the ancestor-column setters.
+[Composite-key inheritance](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_composite_inheritance.rs) propagates the complete ancestor key and joins every component. Set key components through the ancestor-column setters.
 
 The `TableModel` derive macro generates Diesel's [`table!`](https://docs.rs/diesel/latest/diesel/macro.table.html) macro, eliminating manual schema definitions. Query groups are declared explicitly with [`diesel::allow_tables_to_appear_in_same_query!`](https://docs.rs/diesel/latest/diesel/macro.allow_tables_to_appear_in_same_query.html) after the related `TableModel` definitions, covering every pair of tables that appears together in a Diesel query.
-
-## Installation
-
-```toml
-[dependencies]
-diesel-builders = {git = "https://github.com/connetto-rs/diesel-builders.git", branch = "main" }
-```
 
 ## Supported Patterns
 
 ### Simple Table (Base Case)
 
-[A single table with no relationships](diesel-builders/tests/test_base_case.rs). This demonstrates the most basic usage of the builder pattern with type-safe column setters.
+[A single table with no relationships](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_base_case.rs), built through type-safe column setters.
 
 ```rust
 use diesel_builders::prelude::*;
@@ -63,7 +58,7 @@ Ok::<(), Box<dyn std::error::Error>>(())
 
 ### Table Inheritance
 
-[A linear inheritance chain](diesel-builders/tests/test_inheritance_chain.rs). Here, `dog_notes` in `Dog` uses `#[same_as(animals::description)]` to propagate its value up to `Animal`.
+[A linear inheritance chain](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_inheritance_chain.rs). Here, `dog_notes` in `Dog` uses `#[same_as(animals::description)]` to propagate its value up to `Animal`.
 
 ```rust
 use diesel_builders::prelude::*;
@@ -144,7 +139,7 @@ Ok::<(), Box<dyn std::error::Error>>(())
 
 ### Directed Acyclic Graph (DAG)
 
-[Multiple inheritance](diesel-builders/tests/test_dag.rs) where a child extends multiple parents. Pets extends Dogs and Cats, which both extend Animals.
+[Multiple inheritance](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_dag.rs) where a child extends multiple parents. Pets extends Dogs and Cats, which both extend Animals.
 
 ```rust
 use diesel_builders::prelude::*;
@@ -238,11 +233,11 @@ Ok::<(), Box<dyn std::error::Error>>(())
 
 ### Mandatory Triangular Relation
 
-[A complex pattern](diesel-builders/tests/test_mandatory_triangular_relation.rs) where Child extends Parent and references Mandatory, and Mandatory also references Parent. The `#[mandatory]` attribute ensures atomic creation. Insertion order: Parent → Mandatory → Child.
+[Child extends Parent and references Mandatory](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_mandatory_triangular_relation.rs), and Mandatory also references Parent. The `#[mandatory]` attribute ensures atomic creation. Insertion order: Parent → Mandatory → Child.
 
-**Horizontal Same-As**: Like Vertical Same-As, but propagates values from referenced tables via foreign keys. Here, `remote_mandatory_field` mirrors `mandatory_table::mandatory_field` via `HorizontalKey`.
+Horizontal same-as propagates values from referenced tables through foreign keys, where the inheritance example propagated them up the chain. Here, `remote_mandatory_field` mirrors `mandatory_table::mandatory_field` via `HorizontalKey`.
 
-Use `#[same_as(table::column, key_field)]` to choose an explicit relation key, including [mandatory relations to distinct target tables](diesel-builders/tests/test_explicit_mandatory_keys.rs).
+Use `#[same_as(table::column, key_field)]` to choose an explicit relation key, including [mandatory relations to distinct target tables](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_explicit_mandatory_keys.rs).
 
 ```rust
 use diesel_builders::prelude::*;
@@ -311,9 +306,9 @@ Ok::<(), Box<dyn std::error::Error>>(())
 
 ### Discretionary Triangular Relation
 
-[Similar to mandatory](diesel-builders/tests/test_discretionary_triangular_relation.rs), but Child can reference *any* Discretionary record. Use `try_discretionary()` (new record) or `try_discretionary_model()` (existing).
+[Similar to mandatory](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_discretionary_triangular_relation.rs), but Child can reference *any* Discretionary record. Use `try_discretionary()` (new record) or `try_discretionary_model()` (existing).
 
-**Horizontal Same-As**: `remote_discretionary_field` mirrors `discretionary_table::discretionary_field`.
+Here, horizontal same-as makes `remote_discretionary_field` mirror `discretionary_table::discretionary_field`.
 
 ```rust
 use diesel_builders::prelude::*;
@@ -387,7 +382,7 @@ Ok::<(), Box<dyn std::error::Error>>(())
 
 ### Iterating Foreign Keys
 
-[Iterating over foreign keys](diesel-builders/tests/test_iter_foreign_key.rs) grouping by referred index.
+[Iterating over foreign keys](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_iter_foreign_key.rs) grouping by referred index.
 
 ```rust
 use diesel_builders::prelude::*;
@@ -529,7 +524,3 @@ Ok::<(), Box<dyn std::error::Error>>(())
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
