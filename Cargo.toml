@@ -17,8 +17,7 @@ keywords = [
 ]
 categories = [
 	"database",
-	"development-tools::code-generation",
-	"development-tools::libraries",
+	"development-tools",
 ]
 version = "0.1.0"
 rust-version = "1.88"
