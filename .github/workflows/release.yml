@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-version:
+    name: Verify tag matches version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check tag against the published crates' versions
+        run: |
+          for crate in diesel-builders-derive diesel-builders; do
+            version="$(cargo metadata --no-deps --format-version 1 | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')"
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match $crate version $version"
+              exit 1
+            fi
+          done
+
+  ci:
+    name: CI
+    needs: verify-version
+    # actionlint does not parse the `$/` form yet (rhysd/actionlint#711).
+    uses: ./.github/workflows/rust.yml # zizmor: ignore[self-repository]
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  publish:
+    name: Publish to crates.io
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: stable
+      - name: Authenticate to crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      # The derive crate goes first because diesel-builders depends on it. A rerun
+      # after a partial upload skips each version the index already holds.
+      - name: Publish each crate whose version is new
+        run: |
+          for crate in diesel-builders-derive diesel-builders; do
+            version="$(cargo metadata --no-deps --format-version 1 | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')"
+            if curl -sf "https://index.crates.io/di/es/$crate" | jq -e --arg v "$version" 'select(.vers == $v)' > /dev/null; then
+              echo "$crate $version is already on crates.io"
+            else
+              cargo publish -p "$crate"
+            fi
+          done
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  create-release:
+    name: Create the GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create or reuse the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --generate-notes --title "$GITHUB_REF_NAME" \
+            || gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
