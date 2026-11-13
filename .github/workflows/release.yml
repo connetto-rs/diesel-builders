@@ -32,7 +32,8 @@ jobs:
   ci:
     name: CI
     needs: verify-version
-    uses: $/.github/workflows/rust.yml
+    # actionlint does not parse the `$/` form yet (rhysd/actionlint#711).
+    uses: ./.github/workflows/rust.yml # zizmor: ignore[self-repository]
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
