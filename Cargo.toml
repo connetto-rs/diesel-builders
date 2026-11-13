@@ -24,7 +24,7 @@ version = "0.1.0"
 rust-version = "1.88"
 
 [workspace.dependencies]
-diesel = { version = "2.3.13", git = "https://github.com/diesel-rs/diesel", branch = "main" }
+diesel = "2.4.0"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 diesel-builders = { version = "0.1.0", path = "diesel-builders" }
