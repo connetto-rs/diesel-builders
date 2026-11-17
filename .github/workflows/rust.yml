@@ -136,7 +136,7 @@ jobs:
         with:
           toolchain: 1.88.0
       - name: Build release libraries
-        run: cargo build --release -p diesel-builders -p diesel-builders-derive
+        run: cargo build --release -p diesel-builders -p diesel-builders-derive -p validation-errors
 
   package:
     name: Package
@@ -150,7 +150,7 @@ jobs:
         with:
           toolchain: stable
       - name: Generate package archives (without verification)
-        run: cargo package -p diesel-builders-derive -p diesel-builders --no-verify --allow-dirty
+        run: cargo package -p diesel-builders-derive -p diesel-builders -p validation-errors --no-verify --allow-dirty
       # Core registry verification requires compatible `diesel` and `tuplities` releases.
       - name: Verify diesel-builders-derive registry package
         run: cargo package -p diesel-builders-derive --allow-dirty

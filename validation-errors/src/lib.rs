@@ -1,5 +1,4 @@
-//! Crate providing common validation errors.
-
+#![doc = include_str!("../README.md")]
 #![cfg_attr(
     not(test),
     deny(
