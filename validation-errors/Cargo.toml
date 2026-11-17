@@ -1,11 +1,15 @@
 [package]
 name = "validation-errors"
-version = "0.1.0"
+description = "Validation errors for diesel-builders models, convertible into Diesel and builder errors."
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
+readme = "README.md"
 license-file.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 diesel.workspace = true
