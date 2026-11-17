@@ -9,105 +9,169 @@ use crate::table_model::attribute_parsing::{
     extract_same_as_columns,
 };
 
-/// Generate foreign key implementations for triangular relations.
-///
-/// This function identifies columns with `#[mandatory(Table)]` or
-/// `#[discretionary(Table)]` and pairs them with columns having
-/// `#[same_as(Table::Column)]` to generate `HostColumn` implementations,
-/// effectively automating the `fk!` macro for these cases.
-pub fn generate_foreign_key_impls(
-    fields: &syn::punctuated::Punctuated<Field, syn::token::Comma>,
-    table_module: &Ident,
-) -> syn::Result<Vec<TokenStream>> {
-    let mut impls = Vec::new();
+/// A `(key, mirrored)` column pair of a triangular relation. `key` carries
+/// `#[mandatory(table)]` or `#[discretionary(table)]` and `mirrored` carries
+/// `#[same_as(table::column)]` for the same table, so together they form the
+/// foreign key `(key, mirrored) -> (table primary key, table::column)`.
+struct TriangularPair<'a> {
+    /// The field holding the mandatory or discretionary key.
+    key: &'a Field,
+    /// The field mirroring a column of the referenced table.
+    mirrored: &'a Field,
+    /// The table the key references.
+    referenced_table: syn::Path,
+    /// The column of the referenced table the mirrored field holds.
+    referenced_column: syn::Path,
+}
 
-    // 1. Identify mandatory/discretionary columns (M)
-    for field in fields {
-        let Some(field_name) = &field.ident else {
+/// Collects the triangular `(key, mirrored)` pairs that no explicit
+/// `#[table_model(foreign_key)]` covers.
+///
+/// An explicit foreign key covers a pair when its host columns hold both the
+/// key, mapped to a column of the referenced table, and the mirrored column,
+/// mapped to the column it mirrors. Such a key ties the pair to a wider
+/// unique index of the referenced table, so the pair gets no foreign key of
+/// its own.
+///
+/// # Errors
+/// Fails when a referenced table or column path has no segments.
+fn uncovered_triangular_pairs<'a>(
+    fields: &'a syn::punctuated::Punctuated<Field, syn::token::Comma>,
+    foreign_keys: &[ForeignKeyAttribute],
+) -> syn::Result<Vec<TriangularPair<'a>>> {
+    let mut pairs = Vec::new();
+
+    for key in fields {
+        let Some(key_name) = &key.ident else {
             continue;
         };
 
-        // Check for mandatory or discretionary table reference
-        let ref_table = if let Some(table) = extract_mandatory_table(field)? {
+        let referenced_table = if let Some(table) = extract_mandatory_table(key)? {
             table
-        } else if let Some(table) = extract_discretionary_table(field)? {
+        } else if let Some(table) = extract_discretionary_table(key)? {
             table
         } else {
             continue;
         };
+        let referenced_table_name = crate::utils::last_segment_ident(&referenced_table)?;
 
-        let ref_table_name = &ref_table
-            .segments
-            .last()
-            .ok_or_else(|| {
-                syn::Error::new_spanned(
-                    &ref_table,
-                    "Referenced table path must have at least one segment",
-                )
-            })?
-            .ident;
-
-        // 2. Find same_as columns (C) referencing the same table
-        for other_field in fields {
-            let Some(other_field_name) = &other_field.ident else {
+        for mirrored in fields {
+            let Some(mirrored_name) = &mirrored.ident else {
                 continue;
             };
-
-            if field_name == other_field_name {
+            if key_name == mirrored_name {
                 continue;
             }
 
-            for group in extract_same_as_columns(other_field)? {
-                if !disambiguators_match_field(&group, field_name) {
+            for group in extract_same_as_columns(mirrored)? {
+                if !disambiguators_match_field(&group, key_name) {
                     continue;
                 }
 
-                for ref_col in group {
-                    // Check if path starts with ref_table
-                    // We assume the path is like `RefTable::Column` or
-                    // `Module1::Module2::RefTable::Column` So we check if the
-                    // path excluding the last segment matches ref_table
-
-                    let Some(table_name) =
-                        ref_col.segments.iter().rev().nth(1).map(|segment| &segment.ident)
-                    else {
+                for referenced_column in group {
+                    if column_table_ident(&referenced_column) != Some(referenced_table_name)
+                        || covered_by_foreign_key(
+                            key_name,
+                            mirrored_name,
+                            referenced_table_name,
+                            &referenced_column,
+                            foreign_keys,
+                        )?
+                    {
                         continue;
-                    };
-
-                    // Construct a path from table_path_segments to compare with
-                    // ref_table This is a bit heuristic. We
-                    // check if ref_table ends with the table name found
-                    // in same_as. Or better, we check if the segments match.
-
-                    if ref_table_name == table_name {
-                        // Generate HostColumn implementations directly
-                        let host_cols =
-                            quote! { #table_module::#field_name, #table_module::#other_field_name };
-                        let ref_cols = quote! {
-                            <<#table_module::#field_name as diesel_builders::ForeignPrimaryKey>::ReferencedTable as diesel::Table>::PrimaryKey,
-                            #ref_col
-                        };
-
-                        impls.push(quote! {
-                            impl diesel_builders::HostColumn<
-                                diesel_builders::typenum::U0,
-                                ( #host_cols ),
-                                ( #ref_cols )
-                            > for #table_module::#field_name {}
-                        });
-
-                        // 3. Impl HostColumn for col 1
-                        impls.push(quote! {
-                            impl diesel_builders::HostColumn<
-                                diesel_builders::typenum::U1,
-                                ( #host_cols ),
-                                ( #ref_cols )
-                            > for #table_module::#other_field_name {}
-                        });
                     }
+                    pairs.push(TriangularPair {
+                        key,
+                        mirrored,
+                        referenced_table: referenced_table.clone(),
+                        referenced_column,
+                    });
                 }
             }
         }
+    }
+
+    Ok(pairs)
+}
+
+/// Checks whether an explicit foreign key covers a triangular pair, as
+/// described on [`uncovered_triangular_pairs`].
+///
+/// # Errors
+/// Fails when a referenced column path has no segments.
+fn covered_by_foreign_key(
+    key_name: &Ident,
+    mirrored_name: &Ident,
+    referenced_table_name: &Ident,
+    referenced_column: &syn::Path,
+    foreign_keys: &[ForeignKeyAttribute],
+) -> syn::Result<bool> {
+    let mirrored_label = column_grouping_label(referenced_column)?;
+    for foreign_key in foreign_keys {
+        let target_of = |host: &Ident| {
+            let position = foreign_key.host_columns.iter().position(|column| column == host)?;
+            foreign_key.referenced_columns.get(position)
+        };
+        let (Some(key_target), Some(mirrored_target)) =
+            (target_of(key_name), target_of(mirrored_name))
+        else {
+            continue;
+        };
+        if column_table_ident(key_target) == Some(referenced_table_name)
+            && column_grouping_label(mirrored_target)? == mirrored_label
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Returns the table segment of a `table::column` path.
+fn column_table_ident(column: &syn::Path) -> Option<&Ident> {
+    column.segments.iter().rev().nth(1).map(|segment| &segment.ident)
+}
+
+/// Generate foreign key implementations for triangular relations.
+///
+/// Every `(key, mirrored)` pair of a triangular relation, a key with
+/// `#[mandatory(Table)]` or `#[discretionary(Table)]` and a column with
+/// `#[same_as(Table::Column)]`, becomes a two-column foreign key through
+/// `HostColumn` implementations, unless an explicit
+/// `#[table_model(foreign_key)]` covers the pair.
+///
+/// # Errors
+/// Fails when a referenced table or column path has no segments.
+pub fn generate_foreign_key_impls(
+    fields: &syn::punctuated::Punctuated<Field, syn::token::Comma>,
+    foreign_keys: &[ForeignKeyAttribute],
+    table_module: &Ident,
+) -> syn::Result<Vec<TokenStream>> {
+    let mut impls = Vec::new();
+
+    for pair in uncovered_triangular_pairs(fields, foreign_keys)? {
+        let key = &pair.key.ident;
+        let mirrored = &pair.mirrored.ident;
+        let referenced_column = &pair.referenced_column;
+        let host_cols = quote! { #table_module::#key, #table_module::#mirrored };
+        let ref_cols = quote! {
+            <<#table_module::#key as diesel_builders::ForeignPrimaryKey>::ReferencedTable as diesel::Table>::PrimaryKey,
+            #referenced_column
+        };
+
+        impls.push(quote! {
+            impl diesel_builders::HostColumn<
+                diesel_builders::typenum::U0,
+                ( #host_cols ),
+                ( #ref_cols )
+            > for #table_module::#key {}
+        });
+        impls.push(quote! {
+            impl diesel_builders::HostColumn<
+                diesel_builders::typenum::U1,
+                ( #host_cols ),
+                ( #ref_cols )
+            > for #table_module::#mirrored {}
+        });
     }
 
     Ok(impls)
@@ -344,7 +408,7 @@ fn collect_foreign_keys<'a>(
     let mut captured_keys = Vec::new();
 
     // Collect implicit foreign keys from triangular relations
-    collect_triangular_foreign_keys(fields, &mut captured_keys)?;
+    collect_triangular_foreign_keys(fields, foreign_keys, &mut captured_keys)?;
 
     // Collect implicit foreign keys from ancestors
     collect_ancestor_foreign_keys(fields, ancestors, primary_key_columns, &mut captured_keys)?;
@@ -395,71 +459,26 @@ fn collect_ancestor_foreign_keys<'a>(
     Ok(())
 }
 
-/// Collects foreign keys from mandatory/discretionary triangular relations.
+/// Collects foreign keys from the mandatory/discretionary triangular pairs
+/// that no explicit foreign key covers.
 fn collect_triangular_foreign_keys<'a>(
     fields: &'a syn::punctuated::Punctuated<Field, syn::token::Comma>,
+    foreign_keys: &[ForeignKeyAttribute],
     captured_keys: &mut Vec<CapturedForeignKey<'a>>,
 ) -> syn::Result<()> {
-    for field in fields {
-        let Some(field_name) = &field.ident else {
-            continue;
-        };
-
-        // Check for mandatory/discretionary table reference
-        let ref_table = if let Some(table) = extract_mandatory_table(field)? {
-            table
-        } else if let Some(table) = extract_discretionary_table(field)? {
-            table
-        } else {
-            continue;
-        };
-
-        let ref_table_name = crate::utils::last_segment_ident(&ref_table)?;
-
-        // Find same_as columns that reference this table
-        for other_field in fields {
-            let Some(other_field_name) = &other_field.ident else {
-                continue;
-            };
-
-            if field_name == other_field_name {
-                continue;
-            }
-
-            for group in extract_same_as_columns(other_field)? {
-                if !disambiguators_match_field(&group, field_name) {
-                    continue;
-                }
-
-                for ref_col in group {
-                    let Some(table_name) =
-                        ref_col.segments.iter().rev().nth(1).map(|segment| &segment.ident)
-                    else {
-                        continue;
-                    };
-
-                    if ref_table_name == table_name {
-                        // Found a triangular FK: (mandatory/discr_id,
-                        // same_as_field) ->
-                        // (RefTable::PK, RefTable::column)
-                        let ref_pk = quote!(
-                            <#ref_table::table as ::diesel::Table>::PrimaryKey
-                        );
-
-                        let col_name = crate::utils::last_segment_ident(&ref_col)?;
-                        let grouping_key = format!("{ref_table_name}::{col_name}");
-
-                        captured_keys.push(CapturedForeignKey {
-                            host_fields: vec![field, other_field],
-                            ref_cols: vec![ref_pk, quote!(#ref_col)],
-                            grouping_key,
-                        });
-                    }
-                }
-            }
-        }
+    for TriangularPair { key, mirrored, referenced_table, referenced_column } in
+        uncovered_triangular_pairs(fields, foreign_keys)?
+    {
+        let grouping_key = column_grouping_label(&referenced_column)?;
+        captured_keys.push(CapturedForeignKey {
+            host_fields: vec![key, mirrored],
+            ref_cols: vec![
+                quote!(<#referenced_table::table as ::diesel::Table>::PrimaryKey),
+                quote!(#referenced_column),
+            ],
+            grouping_key,
+        });
     }
-
     Ok(())
 }
 

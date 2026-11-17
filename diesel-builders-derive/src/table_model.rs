@@ -646,7 +646,8 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
     )?;
 
     // Generate foreign key implementations for triangular relations
-    let foreign_key_impls = generate_foreign_key_impls(fields, &table_module)?;
+    let foreign_key_impls =
+        generate_foreign_key_impls(fields, &attributes.foreign_keys, &table_module)?;
 
     // Generate explicit foreign key implementations
     let explicit_foreign_key_impls =
