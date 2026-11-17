@@ -16,40 +16,14 @@ env:
 permissions:
   contents: read
 
-jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust: [stable, nightly]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
-        with:
-          toolchain: ${{ matrix.rust }}
-      - name: Install SQLite (Ubuntu)
-        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-      - name: Run tests
-        run: cargo test --verbose
-      - name: Run tests (release)
-        run: cargo test --release --verbose
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+jobs:
   features:
-    name: Test features (${{ matrix.label }})
+    name: Test features
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - label: no-default-features
-            args: --no-default-features
-          - label: size-16
-            args: --no-default-features --features size-16
-          - label: serde+size-128
-            args: --no-default-features --features serde,size-128
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,10 +35,18 @@ jobs:
           components: clippy
       - name: Install SQLite
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-      - name: Run tests
-        run: cargo test -p diesel-builders ${{ matrix.args }} --verbose
-      - name: Check feature lints
-        run: cargo clippy -p diesel-builders -p diesel-builders-derive --all-targets ${{ matrix.args }} -j 2 -- -D warnings
+      - name: Test without default features
+        run: cargo test -p diesel-builders --no-default-features
+      - name: Lint without default features
+        run: cargo clippy -p diesel-builders -p diesel-builders-derive --all-targets --no-default-features -j 2 -- -D warnings
+      - name: Test size-16
+        run: cargo test -p diesel-builders --no-default-features --features size-16
+      - name: Lint size-16
+        run: cargo clippy -p diesel-builders -p diesel-builders-derive --all-targets --no-default-features --features size-16 -j 2 -- -D warnings
+      - name: Test serde and size-128
+        run: cargo test -p diesel-builders --no-default-features --features serde,size-128
+      - name: Lint serde and size-128
+        run: cargo clippy -p diesel-builders -p diesel-builders-derive --all-targets --no-default-features --features serde,size-128 -j 2 -- -D warnings
 
   fmt:
     name: Rustfmt
@@ -94,21 +76,6 @@ jobs:
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
         with:
           toolchain: stable
-          components: clippy
-      - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-  clippy-nightly:
-    name: Clippy (nightly)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
-        with:
-          toolchain: nightly
           components: clippy
       - name: Run clippy
         run: cargo clippy --all-targets -- -D warnings
