@@ -1024,3 +1024,34 @@ struct Probe {
         "Probe",
     );
 }
+
+/// Expands a model whose explicit foreign key maps `slot_id` and `model_id` to
+/// `mapped_columns` and counts its `HostColumn` impls. The `(slot_id, id)`
+/// pair always keeps its own two impls.
+fn host_column_impls_with_foreign_key_to(mapped_columns: &str) -> usize {
+    let source = format!(
+        r"
+#[diesel(table_name = disposals)]
+#[table_model(foreign_key((slot_id, model_id), ({mapped_columns})))]
+struct Disposal {{
+    #[same_as(slots::template_id)]
+    id: i32,
+    #[mandatory(slots)]
+    slot_id: i32,
+    #[same_as(slots::model_id)]
+    model_id: i32,
+}}
+"
+    );
+    let tokens = run_derive(&source).expect("expected the model to expand");
+    let parsed: syn::File = syn::parse2(tokens).expect("expected expansion to be valid Rust");
+    marker_impls(&parsed, "HostColumn")
+}
+
+/// An explicit foreign key replaces the pairwise key of a same-as pair only
+/// when it maps the mirrored column to the column it mirrors.
+#[test]
+fn explicit_foreign_key_replaces_only_the_pair_it_maps() {
+    assert_eq!(host_column_impls_with_foreign_key_to("slots::id, slots::model_id"), 4);
+    assert_eq!(host_column_impls_with_foreign_key_to("slots::id, slots::role_id"), 6);
+}
