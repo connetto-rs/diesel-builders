@@ -239,6 +239,8 @@ Horizontal same-as propagates values from referenced tables through foreign keys
 
 Use `#[same_as(table::column, key_field)]` to choose an explicit relation key, including [mandatory relations to distinct target tables](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_explicit_mandatory_keys.rs).
 
+A same-as column `host` mirroring `table::column` forms the foreign key `(key_field, host) -> (table::id, table::column)`, which needs `unique_index!(table::id, table::column)`. When the key and several same-as columns share one wider foreign key, declare it with `#[table_model(foreign_key((key_field, host_a, host_b), (table::id, table::a, table::b)))]`, which then needs only `unique_index!(table::id, table::a, table::b)`, as in [this four-column slot key](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_wide_horizontal_same_as.rs).
+
 ```rust
 use diesel_builders::prelude::*;
 
