@@ -9,7 +9,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{Field, Ident, Token, punctuated::Punctuated};
 
-use super::attribute_parsing::is_field_infallible;
+use super::attribute_parsing::{is_field_generated, is_field_infallible};
 
 /// Generate `TableBuilder` and `TableModel` aggregated traits.
 pub fn generate_accumulated_traits(
@@ -38,7 +38,7 @@ pub fn generate_accumulated_traits(
             let is_pk = primary_key_columns.iter().any(|pk| pk == field_name);
             let is_surrogate = is_pk && is_surrogate_key;
 
-            if !is_surrogate {
+            if !is_surrogate && !is_field_generated(field) {
                 let is_fallible = has_error_type && !is_field_infallible(field);
                 if is_fallible {
                     set_bounds.push(quote! { ::diesel_builders::TrySetColumn<#col_path> });
@@ -54,7 +54,7 @@ pub fn generate_accumulated_traits(
     let table_builder_trait_doc = format!(
         "Aggregated trait ensuring a builder can set all columns for [`{struct_ident}`].\n\n\
          This trait aggregates [`SetColumn`](::diesel_builders::SetColumn) (or [`TrySetColumn`](::diesel_builders::TrySetColumn)) bounds for every column in the table\n\
-         (excluding surrogate primary keys).\n\n\
+         (excluding surrogate primary keys and generated columns).\n\n\
          It is automatically implemented for any builder that satisfies these bounds."
     );
 

@@ -34,7 +34,8 @@ use accumulated_traits::generate_accumulated_traits;
 use attribute_parsing::{
     extract_diesel_attributes, extract_discretionary_table, extract_field_default_value,
     extract_mandatory_table, extract_same_as_columns, extract_table_model_attributes,
-    is_field_discretionary, is_field_infallible, is_field_mandatory, validate_field_attributes,
+    is_field_discretionary, is_field_generated, is_field_infallible, is_field_mandatory,
+    validate_field_attributes,
 };
 use foreign_keys::{
     generate_explicit_foreign_key_impls, generate_foreign_key_impls,
@@ -105,6 +106,14 @@ fn process_fields(
         let is_pk = primary_key_columns.iter().any(|pk| pk == field_name);
 
         if is_pk {
+            if is_field_generated(field) {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "A primary key column cannot be `#[table_model(generated)]`, \
+                     mark a database-assigned key with `#[table_model(surrogate_key)]` instead",
+                ));
+            }
+
             if extract_field_default_value(field).is_some() && attributes.surrogate_key {
                 return Err(syn::Error::new_spanned(
                     field,
@@ -120,7 +129,7 @@ fn process_fields(
             }
         }
 
-        if is_pk && attributes.surrogate_key {
+        if (is_pk && attributes.surrogate_key) || is_field_generated(field) {
             continue;
         }
 
@@ -665,7 +674,15 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
 
     let buildable_table_impl = generate_buildable_table_impl(&table_module, &attributes)?;
 
-    let model_upsert_impl = generate_model_upsert_impl(struct_ident, &table_module);
+    let written_columns = format_as_nested_tuple(
+        fields
+            .iter()
+            .filter(|field| !is_field_generated(field))
+            .filter_map(|field| field.ident.as_ref())
+            .map(|field_name| quote! { #table_module::#field_name }),
+    );
+    let model_upsert_impl =
+        generate_model_upsert_impl(struct_ident, &table_module, &written_columns);
 
     // Generate final output
     Ok(quote! {
@@ -731,11 +748,15 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
 /// so cannot be named in a generic `where` clause. Emitting the impl where the
 /// table type is concrete lets the compiler discharge those bounds itself, so
 /// the only free parameter left is the connection.
-fn generate_model_upsert_impl(struct_ident: &Ident, table_module: &Ident) -> TokenStream {
+///
+/// `upsert_nested_columns` holds every column except the generated ones, which
+/// the database computes and refuses to have written.
+fn generate_model_upsert_impl(
+    struct_ident: &Ident,
+    table_module: &Ident,
+    upsert_nested_columns: &TokenStream,
+) -> TokenStream {
     let model_table_type = quote! { #table_module::table };
-    let upsert_nested_columns = quote! {
-        <<#model_table_type as ::diesel::Table>::AllColumns as ::diesel_builders::tuplities::NestTuple>::Nested
-    };
     let upsert_changeset = quote! {
         <<#upsert_nested_columns as ::diesel_builders::columns::TupleEqAll>::EqAll as ::diesel_builders::tuplities::FlattenNestedTuple>::Flattened
     };

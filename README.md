@@ -17,6 +17,8 @@ Tuple-size features select the maximum tuple arity. `size-32` is enabled by defa
 
 [Composite-key inheritance](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_composite_inheritance.rs) propagates the complete ancestor key and joins every component. Set key components through the ancestor-column setters.
 
+Columns the database computes, such as `GENERATED ALWAYS AS (...) STORED`, are marked [`#[table_model(generated)]`](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_generated_columns.rs). Builders have no setter for them, inserts and upserts never write them, and the returned model holds the computed values.
+
 The `TableModel` derive macro generates Diesel's [`table!`](https://docs.rs/diesel/latest/diesel/macro.table.html) macro, eliminating manual schema definitions. Query groups are declared explicitly with [`diesel::allow_tables_to_appear_in_same_query!`](https://docs.rs/diesel/latest/diesel/macro.allow_tables_to_appear_in_same_query.html) after the related `TableModel` definitions, covering every pair of tables that appears together in a Diesel query.
 
 ## Supported Patterns
