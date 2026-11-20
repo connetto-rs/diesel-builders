@@ -211,6 +211,12 @@ pub fn is_field_infallible(field: &syn::Field) -> bool {
     })
 }
 
+/// Check if a field is a column the database generates, marked via
+/// `#[table_model(generated)]`.
+pub fn is_field_generated(field: &syn::Field) -> bool {
+    count_nested_attribute(field, "generated") > 0
+}
+
 /// Check if a field is marked as mandatory via `#[mandatory(...)]`.
 pub fn is_field_mandatory(field: &syn::Field) -> bool {
     field.attrs.iter().any(|attr| attr.path().is_ident("mandatory"))
@@ -325,7 +331,9 @@ fn count_infallible_markers(field: &syn::Field) -> usize {
     count
 }
 
-/// Count occurrences of nested attribute within `#[table_model(...)]`.
+/// Count occurrences of nested attribute within `#[table_model(...)]`,
+/// skipping the values of `key = value` entries so that every entry of the
+/// list is visited.
 fn count_nested_attribute(field: &syn::Field, nested_name: &str) -> usize {
     let mut count = 0;
     for attr in &field.attrs {
@@ -333,6 +341,9 @@ fn count_nested_attribute(field: &syn::Field, nested_name: &str) -> usize {
             let _ = attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident(nested_name) {
                     count += 1;
+                }
+                if meta.input.peek(syn::Token![=]) {
+                    meta.value()?.parse::<syn::Expr>()?;
                 }
                 Ok(())
             });
@@ -381,6 +392,37 @@ pub fn validate_field_attributes(field: &syn::Field) -> syn::Result<()> {
             field,
             "Multiple `default` values specified for the same field",
         ));
+    }
+
+    if count_nested_attribute(field, "generated") > 1 {
+        return Err(syn::Error::new_spanned(
+            field,
+            "Duplicate `#[table_model(generated)]` attribute found",
+        ));
+    }
+
+    if is_field_generated(field) {
+        let conflict = if is_field_mandatory(field) {
+            Some("#[mandatory(...)]")
+        } else if is_field_discretionary(field) {
+            Some("#[discretionary(...)]")
+        } else if count_attribute(field, "same_as") > 0 {
+            Some("#[same_as(...)]")
+        } else if count_nested_attribute(field, "default") > 0 {
+            Some("#[table_model(default = ...)]")
+        } else if count_infallible_markers(field) > 0 {
+            Some("#[infallible]")
+        } else {
+            None
+        };
+        if let Some(conflict) = conflict {
+            return Err(syn::Error::new_spanned(
+                field,
+                format!(
+                    "A `#[table_model(generated)]` column has no builder setter, so it cannot also carry `{conflict}`"
+                ),
+            ));
+        }
     }
 
     // Check for unsupported diesel attributes

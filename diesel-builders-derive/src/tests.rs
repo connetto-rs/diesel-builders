@@ -578,6 +578,54 @@ struct C {
     );
 }
 
+/// A generated primary key is rejected while the same column outside the
+/// primary key expands.
+#[test]
+fn generated_primary_key_is_rejected() {
+    invalid_is_rejected_and_counterpart_expands(
+        r"
+struct G {
+    #[table_model(generated)]
+    id: i32,
+    name: String,
+}
+",
+        r"
+struct G {
+    id: i32,
+    #[table_model(generated)]
+    name: String,
+}
+",
+        "G",
+    );
+}
+
+/// A generated column carrying an attribute that needs a builder setter, or a
+/// second `generated` marker, is rejected while the bare generated column
+/// expands.
+#[test]
+fn generated_column_with_setter_attribute_is_rejected() {
+    let conflicts = [
+        "#[table_model(generated)] #[table_model(generated)]",
+        "#[table_model(generated, default = 3)]",
+        "#[table_model(default = 3, generated)]",
+        "#[table_model(generated)] #[infallible]",
+        "#[table_model(generated)] #[same_as(parents::size)]",
+        "#[table_model(generated)] #[mandatory(sides)]",
+        "#[table_model(generated)] #[discretionary(sides)]",
+    ];
+    expansion_is_valid_rust("struct G { id: i32, #[table_model(generated)] size: i32 }", "G");
+    for conflict in conflicts {
+        let error = run_derive(&format!("struct G {{ id: i32, {conflict} size: i32 }}"))
+            .expect_err("expected the conflicting generated column to be rejected");
+        assert!(
+            error.to_string().contains("generated"),
+            "`{conflict}` was rejected for another reason: {error}"
+        );
+    }
+}
+
 /// A struct without named fields is rejected while the accepted counterpart
 /// expands.
 #[test]

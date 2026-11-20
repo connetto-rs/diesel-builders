@@ -68,7 +68,9 @@ fn generate_field_traits(
     struct_ident: &Ident,
     primary_key_columns: &[Ident],
 ) -> TokenStream {
-    use crate::table_model::attribute_parsing::{is_field_discretionary, is_field_mandatory};
+    use crate::table_model::attribute_parsing::{
+        is_field_discretionary, is_field_generated, is_field_mandatory,
+    };
 
     let field_name_str = field_name.to_string();
     let clean_field_name = field_name_str.trim_start_matches("r#");
@@ -117,28 +119,34 @@ fn generate_field_traits(
             None
         };
 
-    let set_trait = generate_set_trait(
-        field_name,
-        &method_name_str,
-        &method_name_ident,
-        table_module,
-        struct_ident,
-        &camel_cased_field_name,
-    );
-    let try_set_trait = generate_try_set_trait(
-        field_name,
-        &method_name_str,
-        table_module,
-        struct_ident,
-        &camel_cased_field_name,
-    );
+    // Generated columns are computed by the database and have no setter.
+    let setter_traits = (!is_field_generated(field)).then(|| {
+        let set_trait = generate_set_trait(
+            field_name,
+            &method_name_str,
+            &method_name_ident,
+            table_module,
+            struct_ident,
+            &camel_cased_field_name,
+        );
+        let try_set_trait = generate_try_set_trait(
+            field_name,
+            &method_name_str,
+            table_module,
+            struct_ident,
+            &camel_cased_field_name,
+        );
+        quote! {
+            #set_trait
+            #try_set_trait
+        }
+    });
     let typed_impl = generate_typed_impl(field_name, field_type, table_module);
 
     quote! {
         #maybe_getter_impl
         #maybe_triangular_impls
-        #set_trait
-        #try_set_trait
+        #setter_traits
         #typed_impl
     }
 }
