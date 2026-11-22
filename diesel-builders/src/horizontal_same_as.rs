@@ -4,7 +4,8 @@ use tuplities::prelude::*;
 use typenum::Unsigned;
 
 use crate::{
-    ForeignPrimaryKey, HasPrimaryKeyColumn, NestedBuildableTables, TableExt, TypedNestedTuple,
+    ColumnTyped, ForeignPrimaryKey, HasPrimaryKeyColumn, NestedBuildableTables, TableExt,
+    TypedNestedTuple,
     ancestors::DescendantWithSelf,
     columns::{
         ColumnsCollection, NestedColumns, NestedColumnsCollection, NonEmptyNestedProjection,
@@ -12,6 +13,157 @@ use crate::{
     },
     tables::NonCompositePrimaryKeyNestedTables,
 };
+
+/// A column type receiving the value of the foreign column of a horizontal
+/// same-as relationship, where `None` stands for a `NULL` foreign value.
+///
+/// A `NOT NULL` column type cannot hold a `NULL` foreign value and is left
+/// unset, while a nullable column type copies it.
+pub trait SameAsReceiver<Value>: Sized {
+    /// Returns the value the column takes, or `None` to leave it unset.
+    ///
+    /// ```
+    /// use diesel_builders::SameAsReceiver;
+    ///
+    /// assert_eq!(<i32 as SameAsReceiver<i32>>::receive(Some(18)), Some(18));
+    /// assert_eq!(<i32 as SameAsReceiver<i32>>::receive(None), None);
+    /// assert_eq!(<Option<i32> as SameAsReceiver<i32>>::receive(Some(18)), Some(Some(18)));
+    /// assert_eq!(<Option<i32> as SameAsReceiver<i32>>::receive(None), Some(None));
+    /// ```
+    fn receive(value: Option<Value>) -> Option<Self>;
+}
+
+impl<T> SameAsReceiver<T> for T {
+    #[inline]
+    fn receive(value: Option<T>) -> Option<T> {
+        value
+    }
+}
+
+impl<T> SameAsReceiver<T> for Option<T> {
+    #[inline]
+    fn receive(value: Option<T>) -> Option<Option<T>> {
+        Some(value)
+    }
+}
+
+/// Nested foreign columns of a horizontal same-as key whose values fill the
+/// nested host columns `Host`.
+///
+/// Each foreign value converts into the value type of its host column, so a
+/// nullable foreign column may feed a `NOT NULL` host column as described by
+/// [`SameAsReceiver`].
+pub trait NestedSameAsInto<Host: TypedNestedTuple>: TypedNestedTuple {
+    /// Converts the foreign column values into the host column values, `None`
+    /// leaving a host column unset.
+    ///
+    /// ```
+    /// # include!("doctest_setup.rs");
+    /// # fn main() {
+    /// use diesel_builders::NestedSameAsInto;
+    /// use schema::users;
+    ///
+    /// let nickname = <(users::nickname,) as NestedSameAsInto<(users::name,)>>::same_as_into;
+    /// assert_eq!(nickname((Some("Ace".to_owned()),)), (Some("Ace".to_owned()),));
+    /// assert_eq!(nickname((None,)), (None,));
+    ///
+    /// let name = <(users::name,) as NestedSameAsInto<(users::nickname,)>>::same_as_into;
+    /// assert_eq!(name(("Ada".to_owned(),)), (Some(Some("Ada".to_owned())),));
+    /// # }
+    /// ```
+    fn same_as_into(
+        values: Self::NestedTupleColumnType,
+    ) -> <Host::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions;
+
+    /// Converts foreign column values that may be unset into the host column
+    /// values, `None` leaving a host column unset.
+    ///
+    /// ```
+    /// # include!("doctest_setup.rs");
+    /// # fn main() {
+    /// use diesel_builders::NestedSameAsInto;
+    /// use schema::users;
+    ///
+    /// let nickname = <(users::nickname,) as NestedSameAsInto<(users::name,)>>::optional_same_as_into;
+    /// assert_eq!(nickname((Some(Some("Ace".to_owned())),)), (Some("Ace".to_owned()),));
+    /// assert_eq!(nickname((Some(None),)), (None,));
+    /// assert_eq!(nickname((None,)), (None,));
+    /// # }
+    /// ```
+    fn optional_same_as_into(
+        values: <Self::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions,
+    ) -> <Host::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions;
+}
+
+/// Converts the value of the foreign column `Foreign` into the value of the
+/// host column `Host`, `None` leaving the host column unset.
+#[inline]
+fn receive_same_as<Foreign, Host>(value: Foreign::ColumnType) -> Option<Host::ColumnType>
+where
+    Foreign: ColumnTyped<ValueType: Into<Host::ValueType>>,
+    Host: ColumnTyped<ColumnType: SameAsReceiver<Host::ValueType>>,
+{
+    let value: Option<Foreign::ValueType> = value.into();
+    Host::ColumnType::receive(value.map(Into::into))
+}
+
+impl<Foreign, Host> NestedSameAsInto<(Host,)> for (Foreign,)
+where
+    Foreign: ColumnTyped<ValueType: Into<Host::ValueType>>,
+    Host: ColumnTyped<ColumnType: SameAsReceiver<Host::ValueType>>,
+    (Foreign,): TypedNestedTuple<NestedTupleColumnType = (Foreign::ColumnType,)>,
+    (Host,): TypedNestedTuple<NestedTupleColumnType = (Host::ColumnType,)>,
+{
+    #[inline]
+    fn same_as_into((value,): (Foreign::ColumnType,)) -> (Option<Host::ColumnType>,) {
+        (receive_same_as::<Foreign, Host>(value),)
+    }
+
+    #[inline]
+    fn optional_same_as_into(
+        (value,): (Option<Foreign::ColumnType>,),
+    ) -> (Option<Host::ColumnType>,) {
+        (value.and_then(receive_same_as::<Foreign, Host>),)
+    }
+}
+
+impl<Foreign, ForeignTail, Host, HostTail> NestedSameAsInto<(Host, HostTail)>
+    for (Foreign, ForeignTail)
+where
+    Foreign: ColumnTyped<ValueType: Into<Host::ValueType>>,
+    Host: ColumnTyped<ColumnType: SameAsReceiver<Host::ValueType>>,
+    ForeignTail: NestedSameAsInto<HostTail>,
+    HostTail: TypedNestedTuple,
+    (Foreign, ForeignTail): TypedNestedTuple<
+        NestedTupleColumnType = (Foreign::ColumnType, ForeignTail::NestedTupleColumnType),
+    >,
+    (Host, HostTail): TypedNestedTuple<
+        NestedTupleColumnType = (Host::ColumnType, HostTail::NestedTupleColumnType),
+    >,
+{
+    #[inline]
+    fn same_as_into(
+        (value, tail): (Foreign::ColumnType, ForeignTail::NestedTupleColumnType),
+    ) -> (
+        Option<Host::ColumnType>,
+        <HostTail::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions,
+    ) {
+        (receive_same_as::<Foreign, Host>(value), ForeignTail::same_as_into(tail))
+    }
+
+    #[inline]
+    fn optional_same_as_into(
+        (value, tail): (
+            Option<Foreign::ColumnType>,
+            <ForeignTail::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions,
+        ),
+    ) -> (
+        Option<Host::ColumnType>,
+        <HostTail::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions,
+    ) {
+        (value.and_then(receive_same_as::<Foreign, Host>), ForeignTail::optional_same_as_into(tail))
+    }
+}
 
 /// A trait for Diesel columns collections that define horizontal same-as
 /// relationships.
@@ -51,13 +203,12 @@ pub trait HorizontalKey:
     type HostColumns: NonEmptyProjection<Table = Self::Table, Nested: NonEmptyNestedProjection>;
     /// The set of foreign columns in other tables which have
     /// an horizontal same-as relationship defined by this key.
-    type ForeignColumns: HorizontalSameAsColumns<Self, Self::HostColumns, Nested: NonEmptyNestedProjection<
-        NestedTupleColumnType:  NestedTupleInto<<<Self::HostColumns as NestTuple>::Nested as TypedNestedTuple>::NestedTupleColumnType> + IntoNestedTupleOption<
-            IntoOptions: NestedTupleOptionInto<
-                <<<Self::HostColumns as NestTuple>::Nested as TypedNestedTuple>::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions,
-            >,
-        >,
-    >>;
+    type ForeignColumns: HorizontalSameAsColumns<
+            Self,
+            Self::HostColumns,
+            Nested: NonEmptyNestedProjection
+                        + NestedSameAsInto<<Self::HostColumns as NestTuple>::Nested>,
+        >;
 }
 
 /// Extension trait for [`HorizontalKey`] to access nested host and foreign
@@ -66,15 +217,7 @@ pub trait HorizontalKeyExt: HorizontalKey {
     /// The nested host columns.
     type NestedHostColumns: NonEmptyNestedProjection;
     /// The nested foreign columns.
-    type NestedForeignColumns: NonEmptyNestedProjection<
-        NestedTupleColumnType: NestedTupleInto<
-            <Self::NestedHostColumns as TypedNestedTuple>::NestedTupleColumnType,
-        > + IntoNestedTupleOption<
-            IntoOptions: NestedTupleOptionInto<
-                <<Self::NestedHostColumns as TypedNestedTuple>::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions,
-            >,
-        >
-    >;
+    type NestedForeignColumns: NonEmptyNestedProjection + NestedSameAsInto<Self::NestedHostColumns>;
 }
 
 impl<K> HorizontalKeyExt for K

@@ -19,9 +19,9 @@ pub use completed_table_builder::{RecursiveBuilderInsert, RecursiveTableBuilder}
 use crate::{
     AncestorOfIndex, BundlableTable, ColumnTyped, DescendantOf, DiscretionarySameAsIndex,
     ForeignPrimaryKey, MandatorySameAsIndex, MayGetColumn, MayGetNestedColumns, NestedColumns,
-    SetColumn, SetDiscretionaryBuilder, SetHomogeneousNestedColumns, SetMandatoryBuilder,
-    TableBuilderBundle, TableExt, TrySetColumn, TrySetDiscretionaryBuilder, TrySetMandatoryBuilder,
-    TypedColumn, ValidateColumn, buildable_table::BuildableTable,
+    NestedSameAsInto, SetColumn, SetDiscretionaryBuilder, SetHomogeneousNestedColumns,
+    SetMandatoryBuilder, TableBuilderBundle, TableExt, TrySetColumn, TrySetDiscretionaryBuilder,
+    TrySetMandatoryBuilder, TypedColumn, ValidateColumn, buildable_table::BuildableTable,
     builder_bundle::BundlableTableExt, vertical_same_as_group::VerticalSameAsGroup,
 };
 
@@ -321,7 +321,9 @@ macro_rules! impl_builder_setters {
                 builder: TableBuilder<<Key as ForeignPrimaryKey>::ReferencedTable>,
             ) -> Result<&mut Self, T::Error> {
                 let columns = builder.may_get_nested_columns();
-                let converted_columns = columns.nested_tuple_option_into();
+                let converted_columns = <Key::NestedForeignColumns as NestedSameAsInto<
+                    Key::NestedHostColumns,
+                >>::optional_same_as_into(columns);
                 let context = MutationContext::$context_fn(
                     std::ptr::from_ref(self.ancestor_bundle()).cast::<()>(),
                     <<Key as $index>::Idx as typenum::Unsigned>::USIZE,
@@ -360,7 +362,9 @@ macro_rules! impl_builder_setters {
                 builder: TableBuilder<<Key as ForeignPrimaryKey>::ReferencedTable>,
             ) -> &mut Self {
                 let columns = builder.may_get_nested_columns();
-                let converted_columns = columns.nested_tuple_option_into();
+                let converted_columns = <Key::NestedForeignColumns as NestedSameAsInto<
+                    Key::NestedHostColumns,
+                >>::optional_same_as_into(columns);
                 let context = MutationContext::$context_fn(
                     std::ptr::from_ref(self.ancestor_bundle()).cast::<()>(),
                     <<Key as $index>::Idx as typenum::Unsigned>::USIZE,
