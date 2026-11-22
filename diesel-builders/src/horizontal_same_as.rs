@@ -4,8 +4,8 @@ use tuplities::prelude::*;
 use typenum::Unsigned;
 
 use crate::{
-    ColumnTyped, ForeignPrimaryKey, HasPrimaryKeyColumn, NestedBuildableTables, TableExt,
-    TypedNestedTuple,
+    ColumnTyped, ForeignPrimaryKey, HasPrimaryKeyColumn, NestedBuildableTables, OptionalRef,
+    TableExt, TypedNestedTuple,
     ancestors::DescendantWithSelf,
     columns::{
         ColumnsCollection, NestedColumns, NestedColumnsCollection, NonEmptyNestedProjection,
@@ -14,10 +14,10 @@ use crate::{
     tables::NonCompositePrimaryKeyNestedTables,
 };
 
-/// A column type receiving the value of the foreign column of a horizontal
-/// same-as relationship, where `None` stands for a `NULL` foreign value.
+/// A column type receiving the value of the source column of a same-as
+/// relationship, where `None` stands for a `NULL` source value.
 ///
-/// A `NOT NULL` column type cannot hold a `NULL` foreign value and is left
+/// A `NOT NULL` column type cannot hold a `NULL` source value and is left
 /// unset, while a nullable column type copies it.
 pub trait SameAsReceiver<Value>: Sized {
     /// Returns the value the column takes, or `None` to leave it unset.
@@ -45,6 +45,19 @@ impl<T> SameAsReceiver<T> for Option<T> {
     fn receive(value: Option<T>) -> Option<Option<T>> {
         Some(value)
     }
+}
+
+/// Converts a same-as source value into the value of the target column `C`,
+/// `None` leaving the target column unset.
+#[inline]
+pub(crate) fn receive_same_as_value<Source, C>(
+    value: &impl OptionalRef<Source>,
+) -> Option<C::ColumnType>
+where
+    Source: Clone + Into<C::ValueType>,
+    C: ColumnTyped<ColumnType: SameAsReceiver<C::ValueType>>,
+{
+    C::ColumnType::receive(value.as_optional_ref().cloned().map(Into::into))
 }
 
 /// Nested foreign columns of a horizontal same-as key whose values fill the
