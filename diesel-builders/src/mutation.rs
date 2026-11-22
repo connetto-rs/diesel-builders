@@ -11,8 +11,8 @@
 use tuplities::prelude::IntoNestedTupleOption;
 
 use crate::{
-    NestedColumns, OptionalRef, SetColumn, TableExt, TypedColumn, TypedNestedTupleCollection,
-    ValidateColumn,
+    NestedColumns, OptionalRef, SameAsReceiver, SetColumn, TableExt, TypedColumn,
+    TypedNestedTupleCollection, ValidateColumn, horizontal_same_as::receive_same_as_value,
 };
 
 /// Tracks the side builder slot that an attachment replaces during a mutation.
@@ -110,7 +110,8 @@ pub(crate) trait PrepareOptionalColumns<E, CS: NestedColumns> {
     fn apply_optional_columns(&mut self, prepared: Self::Prepared);
 }
 
-/// Prepares one value broadcast to a homogeneous column group.
+/// Prepares one value broadcast to a homogeneous column group, a `None` value
+/// setting nullable columns to `NULL` and leaving `NOT NULL` columns unset.
 pub(crate) trait PrepareHomogeneous<E, Type, CS: NestedColumns> {
     /// The prepared homogeneous group value.
     type Prepared;
@@ -390,9 +391,9 @@ impl<T, E, Type> PrepareHomogeneous<E, Type, ()> for T {
 
 impl<Type, C1, T, E> PrepareHomogeneous<E, Type, (C1,)> for T
 where
-    Type: Clone,
+    Type: Clone + Into<C1::ValueType>,
     T: PrepareColumn<C1>,
-    C1: TypedColumn<ColumnType: From<Type>, Table: TableExt>,
+    C1: TypedColumn<ColumnType: SameAsReceiver<C1::ValueType>, Table: TableExt>,
     E: From<<T as ValidateColumn<C1>>::Error>,
 {
     type Prepared = Option<<T as PrepareColumn<C1>>::Prepared>;
@@ -403,9 +404,8 @@ where
         value: &impl OptionalRef<Type>,
         context: &MutationContext,
     ) -> Result<Self::Prepared, E> {
-        match value.as_optional_ref() {
-            Some(value) => {
-                let converted: C1::ColumnType = value.clone().into();
+        match receive_same_as_value::<Type, C1>(value) {
+            Some(converted) => {
                 <T as PrepareColumn<C1>>::prepare_column(self, converted, context)
                     .map(Some)
                     .map_err(|(_, error)| error.into())
@@ -424,9 +424,9 @@ where
 
 impl<Type, CHead, CTail, T, E> PrepareHomogeneous<E, Type, (CHead, CTail)> for T
 where
-    Type: Clone,
+    Type: Clone + Into<CHead::ValueType>,
     CHead: TypedColumn,
-    CHead::ColumnType: From<Type>,
+    CHead::ColumnType: SameAsReceiver<CHead::ValueType>,
     CTail: NestedColumns,
     (CHead, CTail):
         NestedColumns<NestedTupleColumnType = (CHead::ColumnType, CTail::NestedTupleColumnType)>,
@@ -444,14 +444,14 @@ where
         value: &impl OptionalRef<Type>,
         context: &MutationContext,
     ) -> Result<Self::Prepared, E> {
-        let head_prepared = if let Some(value) = value.as_optional_ref() {
-            let converted: CHead::ColumnType = value.clone().into();
-            Some(
-                <T as PrepareColumn<CHead>>::prepare_column(self, converted, context)
-                    .map_err(|(_, error)| error)?,
-            )
-        } else {
-            None
+        let head_prepared = match receive_same_as_value::<Type, CHead>(value) {
+            Some(converted) => {
+                Some(
+                    <T as PrepareColumn<CHead>>::prepare_column(self, converted, context)
+                        .map_err(|(_, error)| error)?,
+                )
+            }
+            None => None,
         };
         let tail_prepared =
             <T as PrepareHomogeneous<E, Type, CTail>>::prepare_homogeneous(self, value, context)?;

@@ -3,7 +3,8 @@
 //!
 //! A group prepares every present leaf before any of them is applied, so a
 //! later rejected leaf leaves the earlier side builders untouched. A null
-//! source or an absent side builder produces no prepared leaf and no
+//! source sets nullable side columns to `NULL` and leaves `NOT NULL` side
+//! columns unset. An absent side builder produces no prepared leaf and no
 //! allocation. An exclusion context skips side builders whose owner is being
 //! replaced.
 //!
@@ -12,8 +13,8 @@
 //! by their index, generated trait and method names.
 
 use crate::{
-    DiscretionarySameAsIndex, MandatorySameAsIndex, OptionalRef, TypedColumn,
-    columns::NestedColumns, mutation::MutationContext,
+    DiscretionarySameAsIndex, MandatorySameAsIndex, OptionalRef, SameAsReceiver, TypedColumn,
+    columns::NestedColumns, horizontal_same_as::receive_same_as_value, mutation::MutationContext,
 };
 
 /// Emits the mandatory and discretionary same-as preparation trait and impl
@@ -112,14 +113,14 @@ macro_rules! impl_same_as_column_preparation {
         }
 
         impl<
-            Type: Clone,
+            Type: Clone + Into<C::ValueType>,
             E,
             T,
             Key: $index,
             C: TypedColumn<Table = Key::ReferencedTable>,
         > $group_trait<E, Type, (Key,), (C,)> for T
         where
-            C::ColumnType: From<Type>,
+            C::ColumnType: SameAsReceiver<C::ValueType>,
             T: $leaf_trait<Key, C>,
             E: From<<T as $leaf_trait<Key, C>>::Error>,
         {
@@ -131,13 +132,12 @@ macro_rules! impl_same_as_column_preparation {
                 value: &impl OptionalRef<Type>,
                 context: &MutationContext,
             ) -> Result<Self::Prepared, E> {
-                let Some(value) = value.as_optional_ref() else {
-                    return Ok(None);
-                };
                 if !<T as $leaf_trait<Key, C>>::$has_method(self, context) {
                     return Ok(None);
                 }
-                let converted = <C::ColumnType as From<Type>>::from(value.clone());
+                let Some(converted) = receive_same_as_value::<Type, C>(value) else {
+                    return Ok(None);
+                };
                 let prepared = <T as $leaf_trait<Key, C>>::$prepare_leaf_method(
                     self, converted, context,
                 )
@@ -154,7 +154,7 @@ macro_rules! impl_same_as_column_preparation {
         }
 
         impl<
-            Type: Clone,
+            Type: Clone + Into<CHead::ValueType>,
             E,
             T,
             KeysHead: $index,
@@ -165,7 +165,7 @@ macro_rules! impl_same_as_column_preparation {
         where
             (KeysHead, KeysTail): NestedColumns,
             (CHead, CTail): NestedColumns,
-            CHead::ColumnType: From<Type>,
+            CHead::ColumnType: SameAsReceiver<CHead::ValueType>,
             T: $leaf_trait<KeysHead, CHead> + $group_trait<E, Type, KeysTail, CTail>,
             E: From<<T as $leaf_trait<KeysHead, CHead>>::Error>,
         {
@@ -180,23 +180,20 @@ macro_rules! impl_same_as_column_preparation {
                 value: &impl OptionalRef<Type>,
                 context: &MutationContext,
             ) -> Result<Self::Prepared, E> {
-                let Some(value) = value.as_optional_ref() else {
-                    let tail = <T as $group_trait<E, Type, KeysTail, CTail>>::$prepare_group_method(
-                        self, value, context,
-                    )?;
-                    return Ok((None, tail));
+                let converted = if <T as $leaf_trait<KeysHead, CHead>>::$has_method(self, context) {
+                    receive_same_as_value::<Type, CHead>(value)
+                } else {
+                    None
                 };
-                let head =
-                    if <T as $leaf_trait<KeysHead, CHead>>::$has_method(self, context) {
-                        let converted = <CHead::ColumnType as From<Type>>::from(value.clone());
-                        let prepared = <T as $leaf_trait<KeysHead, CHead>>::$prepare_leaf_method(
+                let head = match converted {
+                    Some(converted) => Some(
+                        <T as $leaf_trait<KeysHead, CHead>>::$prepare_leaf_method(
                             self, converted, context,
                         )
-                        .map_err(|(_, error)| error)?;
-                        Some(prepared)
-                    } else {
-                        None
-                    };
+                        .map_err(|(_, error)| error)?,
+                    ),
+                    None => None,
+                };
                 let tail =
                     <T as $group_trait<E, Type, KeysTail, CTail>>::$prepare_group_method(
                         self, value, context,

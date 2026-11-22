@@ -1,11 +1,15 @@
 //! Trait indicating a builder can set multiple columns.
 
 use crate::{
-    OptionalRef, SetColumn, TableExt, TypedColumn,
+    OptionalRef, SameAsReceiver, SetColumn, TableExt, TypedColumn,
     columns::{HomogeneouslyTypedNestedColumns, NonEmptyNestedProjection},
+    horizontal_same_as::receive_same_as_value,
 };
 
 /// Trait indicating a builder can set multiple columns.
+///
+/// A `None` value sets every nullable column to `NULL` and leaves every
+/// `NOT NULL` column unset, as described by [`SameAsReceiver`].
 pub trait SetHomogeneousNestedColumns<Type, CS: HomogeneouslyTypedNestedColumns<Type>> {
     /// Set the `nested_values` of the specified columns.
     ///
@@ -40,26 +44,27 @@ impl<Type, T> SetHomogeneousNestedColumns<Type, ()> for T {
     }
 }
 
-impl<Type: Clone, C1, T> SetHomogeneousNestedColumns<Type, (C1,)> for T
+impl<Type: Clone + Into<C1::ValueType>, C1, T> SetHomogeneousNestedColumns<Type, (C1,)> for T
 where
     T: SetColumn<C1>,
     C1: TypedColumn<Table: TableExt>,
-    C1::ColumnType: From<Type>,
+    C1::ColumnType: SameAsReceiver<C1::ValueType>,
 {
     #[inline]
     fn set_homogeneous_nested_columns(&mut self, value: &impl OptionalRef<Type>) -> &mut Self {
-        if let Some(value) = value.as_optional_ref() {
-            self.set_column(value.clone());
+        if let Some(value) = receive_same_as_value::<Type, C1>(value) {
+            self.set_column(value);
         }
         self
     }
 }
 
-impl<Type: Clone, CHead, CTail, T> SetHomogeneousNestedColumns<Type, (CHead, CTail)> for T
+impl<Type: Clone + Into<CHead::ValueType>, CHead, CTail, T>
+    SetHomogeneousNestedColumns<Type, (CHead, CTail)> for T
 where
     CHead: TypedColumn,
     CTail: HomogeneouslyTypedNestedColumns<Type>,
-    CHead::ColumnType: From<Type>,
+    CHead::ColumnType: SameAsReceiver<CHead::ValueType>,
     (CHead, CTail): NonEmptyNestedProjection<
         NestedTupleValueType = (CHead::ValueType, CTail::NestedTupleValueType),
     >,
@@ -68,8 +73,8 @@ where
     #[inline]
     fn set_homogeneous_nested_columns(&mut self, value: &impl OptionalRef<Type>) -> &mut Self {
         self.set_homogeneous_nested_columns(value);
-        if let Some(value) = value.as_optional_ref() {
-            self.set_column(value.clone());
+        if let Some(value) = receive_same_as_value::<Type, CHead>(value) {
+            self.set_column(value);
         }
         self
     }

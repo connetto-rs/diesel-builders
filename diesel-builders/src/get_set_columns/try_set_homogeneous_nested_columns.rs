@@ -1,7 +1,7 @@
 //! Trait indicating a builder can set multiple columns.
 
 use crate::{
-    OptionalRef, TableExt, TypedColumn, ValidateColumn,
+    OptionalRef, SameAsReceiver, TableExt, TypedColumn, ValidateColumn,
     columns::{HomogeneouslyTypedNestedColumns, NonEmptyNestedProjection},
     mutation::{MutationContext, PrepareColumn, PrepareHomogeneous},
 };
@@ -36,8 +36,8 @@ pub trait TrySetHomogeneousNestedColumns<Type, Error, CS: HomogeneouslyTypedNest
     /// );
     /// assert_eq!(MayGetColumn::<users::age>::may_get_column(&values), Some(20));
     ///
-    /// // A missing value, such as an unattached optional same-as target,
-    /// // leaves every column in the group untouched.
+    /// // A `None` value leaves a `NOT NULL` column untouched and sets a
+    /// // nullable column to `NULL`.
     /// TrySetHomogeneousNestedColumns::<i32, ValidationError, (users::age,)>::try_set_homogeneous_nested_columns(
     ///     &mut values,
     ///     &None::<i32>,
@@ -52,11 +52,12 @@ pub trait TrySetHomogeneousNestedColumns<Type, Error, CS: HomogeneouslyTypedNest
     ) -> Result<&mut Self, Error>;
 }
 
-impl<Type: Clone, C1, Error, T> TrySetHomogeneousNestedColumns<Type, Error, (C1,)> for T
+impl<Type: Clone + Into<C1::ValueType>, C1, Error, T>
+    TrySetHomogeneousNestedColumns<Type, Error, (C1,)> for T
 where
     T: PrepareColumn<C1>,
     Error: From<<T as ValidateColumn<C1>>::Error>,
-    C1: TypedColumn<ColumnType: From<Type>, Table: TableExt>,
+    C1: TypedColumn<ColumnType: SameAsReceiver<C1::ValueType>, Table: TableExt>,
 {
     #[inline]
     fn try_set_homogeneous_nested_columns(
@@ -72,11 +73,11 @@ where
     }
 }
 
-impl<Error, Type: Clone, CHead, CTail, T>
+impl<Error, Type: Clone + Into<CHead::ValueType>, CHead, CTail, T>
     TrySetHomogeneousNestedColumns<Type, Error, (CHead, CTail)> for T
 where
     CHead: TypedColumn,
-    CHead::ColumnType: From<Type>,
+    CHead::ColumnType: SameAsReceiver<CHead::ValueType>,
     CTail: HomogeneouslyTypedNestedColumns<Type>,
     (CHead, CTail): NonEmptyNestedProjection<
             NestedTupleValueType = (CHead::ValueType, CTail::NestedTupleValueType),
