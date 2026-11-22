@@ -1,12 +1,12 @@
 //! Submodule providing the `SetBuilder` trait.
 
 use diesel::Table;
-use tuplities::prelude::NestedTupleInto;
 
 use crate::{
     BuildableTable, DiscretionarySameAsIndex, ForeignPrimaryKey, GetColumnExt, GetNestedColumns,
-    HasTableExt, MandatorySameAsIndex, NestedColumns, SetColumn, SetNestedColumns, TableBuilder,
-    TableExt, TrySetNestedColumns, TypedColumn, TypedNestedTuple, ValidateNestedColumns,
+    HasTableExt, MandatorySameAsIndex, MaySetColumns, MayValidateNestedColumns, NestedColumns,
+    NestedSameAsInto, SetColumn, TableBuilder, TableExt, TryMaySetNestedColumns, TypedColumn,
+    TypedNestedTuple,
 };
 
 /// Trait for setting a mandatory triangular builder relationship.
@@ -141,7 +141,7 @@ pub trait SetDiscretionaryModel<Key: DiscretionarySameAsIndex> {
 impl<C, T> SetDiscretionaryModel<C> for T
 where
     C: DiscretionarySameAsIndex,
-    Self: SetNestedColumns<C::NestedHostColumns> + SetColumn<C>,
+    Self: MaySetColumns<C::NestedHostColumns> + SetColumn<C>,
     <<C as ForeignPrimaryKey>::ReferencedTable as TableExt>::Model:
         GetNestedColumns<C::NestedForeignColumns>,
 {
@@ -152,9 +152,8 @@ where
     ) -> &mut Self {
         let primary_key = model.get_column::<<C::ReferencedTable as Table>::PrimaryKey>();
         <Self as SetColumn<C>>::set_column(self, primary_key);
-        let columns = model.get_nested_columns();
-        let converted_columns = columns.nested_tuple_into();
-        self.set_nested_columns(converted_columns)
+        let columns = C::NestedForeignColumns::same_as_into(model.get_nested_columns());
+        self.may_set_nested_columns(columns)
     }
 }
 
@@ -296,8 +295,8 @@ where
             <C::NestedHostColumns as TypedNestedTuple>::NestedTupleColumnType,
         ),
     >,
-    Self: TrySetNestedColumns<<Self::Table as TableExt>::Error, (C, C::NestedHostColumns)>
-        + ValidateNestedColumns<<Self::Table as TableExt>::Error, C::NestedHostColumns>,
+    Self: TryMaySetNestedColumns<<Self::Table as TableExt>::Error, (C, C::NestedHostColumns)>
+        + MayValidateNestedColumns<<Self::Table as TableExt>::Error, C::NestedHostColumns>,
     <<C as ForeignPrimaryKey>::ReferencedTable as TableExt>::Model:
         GetNestedColumns<C::NestedForeignColumns>,
 {
@@ -308,10 +307,9 @@ where
     ) -> Result<&mut Self, <Self::Table as TableExt>::Error> {
         let primary_key: C::ValueType =
             model.get_column::<<C::ReferencedTable as Table>::PrimaryKey>();
-        let columns = model.get_nested_columns();
-        let converted_columns = columns.nested_tuple_into();
-        self.validate_nested_columns(&converted_columns)?;
-        self.try_set_nested_columns((primary_key.into(), converted_columns))
+        let columns = C::NestedForeignColumns::same_as_into(model.get_nested_columns());
+        self.may_validate_nested_columns(&columns)?;
+        self.try_may_set_nested_columns((Some(primary_key.into()), columns))
     }
 }
 
