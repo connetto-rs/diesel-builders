@@ -19,17 +19,17 @@ use crate::{
 ///
 /// A `NOT NULL` column type cannot hold a `NULL` foreign value and is left
 /// unset, while a nullable column type copies it.
-///
-/// ```
-/// use diesel_builders::SameAsReceiver;
-///
-/// assert_eq!(<i32 as SameAsReceiver<i32>>::receive(Some(18)), Some(18));
-/// assert_eq!(<i32 as SameAsReceiver<i32>>::receive(None), None);
-/// assert_eq!(<Option<i32> as SameAsReceiver<i32>>::receive(Some(18)), Some(Some(18)));
-/// assert_eq!(<Option<i32> as SameAsReceiver<i32>>::receive(None), Some(None));
-/// ```
 pub trait SameAsReceiver<Value>: Sized {
     /// Returns the value the column takes, or `None` to leave it unset.
+    ///
+    /// ```
+    /// use diesel_builders::SameAsReceiver;
+    ///
+    /// assert_eq!(<i32 as SameAsReceiver<i32>>::receive(Some(18)), Some(18));
+    /// assert_eq!(<i32 as SameAsReceiver<i32>>::receive(None), None);
+    /// assert_eq!(<Option<i32> as SameAsReceiver<i32>>::receive(Some(18)), Some(Some(18)));
+    /// assert_eq!(<Option<i32> as SameAsReceiver<i32>>::receive(None), Some(None));
+    /// ```
     fn receive(value: Option<Value>) -> Option<Self>;
 }
 
@@ -56,12 +56,40 @@ impl<T> SameAsReceiver<T> for Option<T> {
 pub trait NestedSameAsInto<Host: TypedNestedTuple>: TypedNestedTuple {
     /// Converts the foreign column values into the host column values, `None`
     /// leaving a host column unset.
+    ///
+    /// ```
+    /// # include!("doctest_setup.rs");
+    /// # fn main() {
+    /// use diesel_builders::NestedSameAsInto;
+    /// use schema::users;
+    ///
+    /// let nickname = <(users::nickname,) as NestedSameAsInto<(users::name,)>>::same_as_into;
+    /// assert_eq!(nickname((Some("Ace".to_owned()),)), (Some("Ace".to_owned()),));
+    /// assert_eq!(nickname((None,)), (None,));
+    ///
+    /// let name = <(users::name,) as NestedSameAsInto<(users::nickname,)>>::same_as_into;
+    /// assert_eq!(name(("Ada".to_owned(),)), (Some(Some("Ada".to_owned())),));
+    /// # }
+    /// ```
     fn same_as_into(
         values: Self::NestedTupleColumnType,
     ) -> <Host::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions;
 
     /// Converts foreign column values that may be unset into the host column
     /// values, `None` leaving a host column unset.
+    ///
+    /// ```
+    /// # include!("doctest_setup.rs");
+    /// # fn main() {
+    /// use diesel_builders::NestedSameAsInto;
+    /// use schema::users;
+    ///
+    /// let nickname = <(users::nickname,) as NestedSameAsInto<(users::name,)>>::optional_same_as_into;
+    /// assert_eq!(nickname((Some(Some("Ace".to_owned())),)), (Some("Ace".to_owned()),));
+    /// assert_eq!(nickname((Some(None),)), (None,));
+    /// assert_eq!(nickname((None,)), (None,));
+    /// # }
+    /// ```
     fn optional_same_as_into(
         values: <Self::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions,
     ) -> <Host::NestedTupleColumnType as IntoNestedTupleOption>::IntoOptions;
