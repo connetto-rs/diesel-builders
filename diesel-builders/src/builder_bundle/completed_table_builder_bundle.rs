@@ -1,6 +1,6 @@
 //! Submodule for the completed table builder bundle and related impls.
 
-use diesel::{Column, Insertable, RunQueryDsl, associations::HasTable};
+use diesel::{Column, Insertable, associations::HasTable};
 use tuplities::prelude::*;
 
 use crate::{
@@ -14,6 +14,7 @@ use crate::{
     columns::TupleEqAll,
     horizontal_same_as_group::HorizontalSameAsGroupExt,
     insert_transaction::{CheckNestedStoredOptions, InsertBuilder, InsertBundle},
+    stored_row_insert::InsertStoredRow,
 };
 
 #[derive(Debug)]
@@ -147,7 +148,8 @@ pub trait RecursiveBundleInsert<Error, Conn>: HasTableExt {
     ) -> BuilderResult<<<Self as HasTable>::Table as TableExt>::Model, Error>;
 }
 
-impl<T, Conn, MandatoryError, DiscretionaryError> InsertBundle<Conn> for CompletedTableBuilderBundle<T>
+impl<T, Conn, MandatoryError, DiscretionaryError> InsertBundle<Conn>
+    for CompletedTableBuilderBundle<T>
 where
     Conn: diesel::connection::LoadConnection,
     T: BundlableTableExt,
@@ -162,25 +164,30 @@ where
     T::MandatoryNestedBuilders: InsertTuple<Conn, ValidationError = MandatoryError>,
     T::OptionalDiscretionaryNestedBuilders:
         InsertOptionTuple<Conn, ValidationError = DiscretionaryError>,
-    T::NewRecord: TupleEqAll<EqAll: FlattenNestedTuple<Flattened: Insertable<T>>> + TypedNestedTuple<NestedTupleColumnType=T::CompletedNewValues>,
-    diesel::query_builder::InsertStatement<
-        Self::Table,
-        <<<T::NewRecord as TupleEqAll>::EqAll as FlattenNestedTuple>::Flattened as Insertable<T>>::Values,
-    >: for<'query> diesel::query_dsl::LoadQuery<'query, Conn, <Self::Table as TableExt>::Model>,
+    T::NewRecord: TupleEqAll<EqAll: FlattenNestedTuple<Flattened: Insertable<T>>>
+        + TypedNestedTuple<NestedTupleColumnType = T::CompletedNewValues>,
+    Conn::Backend: InsertStoredRow<
+            Conn,
+            T,
+            <<T::NewRecord as TupleEqAll>::EqAll as FlattenNestedTuple>::Flattened,
+        >,
 {
-    type ValidationError = EitherValidationError<
-        MandatoryError,
+    type ValidationError =
         EitherValidationError<
-            <T::NewValues as TrySetValues<T::NestedMandatoryTriangularColumns>>::Error,
+            MandatoryError,
             EitherValidationError<
-                DiscretionaryError,
+                <T::NewValues as TrySetValues<T::NestedMandatoryTriangularColumns>>::Error,
                 EitherValidationError<
-                    <T::NewValues as TryMaySetValues<T::NestedDiscretionaryTriangularColumns>>::Error,
-                    <T as TableExt>::RecordError,
+                    DiscretionaryError,
+                    EitherValidationError<
+                        <T::NewValues as TryMaySetValues<
+                            T::NestedDiscretionaryTriangularColumns,
+                        >>::Error,
+                        <T as TableExt>::RecordError,
+                    >,
                 >,
             >,
-        >,
-    >;
+        >;
 
     fn insert_bundle(
         mut self,
@@ -192,30 +199,32 @@ where
             .map_err(|error| error.map_validation(EitherValidationError::Left))?;
         let mandatory_primary_keys: T::NestedMandatoryPrimaryKeyTypes =
             mandatory_models.tuple_get_nested_columns();
-        self.insertable_model
-            .try_set_values(mandatory_primary_keys)
-            .map_err(|(_, error)| {
-                BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Left(
-                    error,
-                )))
-            })?;
+        self.insertable_model.try_set_values(mandatory_primary_keys).map_err(|(_, error)| {
+            BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Left(
+                error,
+            )))
+        })?;
         let discretionary_models: T::OptionalNestedDiscretionaryModels = self
             .nested_discretionary_associated_builders
             .insert_option_tuple(conn)
             .map_err(|error| {
                 error.map_validation(|error| {
-                    EitherValidationError::Right(EitherValidationError::Right(EitherValidationError::Left(error)))
+                    EitherValidationError::Right(EitherValidationError::Right(
+                        EitherValidationError::Left(error),
+                    ))
                 })
             })?;
         let discretionary_primary_keys: T::OptionalNestedDiscretionaryPrimaryKeyTypes =
             discretionary_models.tuple_may_get_nested_columns();
-        self.insertable_model
-            .try_may_set_values(discretionary_primary_keys)
-            .map_err(|(_, error)| {
-                BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Right(
-                    EitherValidationError::Right(EitherValidationError::Left(error)),
-                )))
-            })?;
+        self.insertable_model.try_may_set_values(discretionary_primary_keys).map_err(
+            |(_, error)| {
+                BuilderError::Validation(EitherValidationError::Right(
+                    EitherValidationError::Right(EitherValidationError::Right(
+                        EitherValidationError::Left(error),
+                    )),
+                ))
+            },
+        )?;
 
         // Check the required fields without moving the stored values, so that
         // the record validator observes the complete final values.
@@ -230,13 +239,11 @@ where
             }));
         }
 
-        self.insertable_model
-            .validate_record()
-            .map_err(|error| {
-                BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Right(
-                    EitherValidationError::Right(EitherValidationError::Right(error)),
-                )))
-            })?;
+        self.insertable_model.validate_record().map_err(|error| {
+            BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Right(
+                EitherValidationError::Right(EitherValidationError::Right(error)),
+            )))
+        })?;
 
         let columns = T::NewRecord::default();
         #[expect(
@@ -250,9 +257,10 @@ where
             .transpose_or(T::NewRecord::NESTED_COLUMN_NAMES)
             .expect("every required column was already proven present");
 
-        Ok(diesel::insert_into(T::default())
-            .values(columns.eq_all(values).flatten())
-            .get_result(conn)?)
+        Ok(<Conn::Backend as InsertStoredRow<Conn, T, _>>::insert_stored_row(
+            columns.eq_all(values).flatten(),
+            conn,
+        )?)
     }
 }
 
