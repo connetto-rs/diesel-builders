@@ -684,6 +684,12 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
     let model_upsert_impl =
         generate_model_upsert_impl(struct_ident, &table_module, &written_columns);
 
+    let key_source = if attributes.surrogate_key {
+        quote! { ::diesel_builders::SurrogateKey }
+    } else {
+        quote! { ::diesel_builders::SuppliedKey }
+    };
+
     // Generate final output
     Ok(quote! {
         #(#warnings)*
@@ -729,6 +735,7 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
             type Error = #error_type;
             type DefaultColumns = #default_columns_tuple;
             type RecordError = #record_error_type;
+            type KeySource = #key_source;
 
             fn default_new_values() -> Self::NewValues {
                 #default_new_record
