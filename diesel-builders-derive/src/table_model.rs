@@ -952,31 +952,27 @@ fn generate_buildable_table_impl(
     })
 }
 
-/// Builds the `map_err` expression placing a stage error at its position in
-/// the right-nested `EitherValidationError` tree over `stages` stages: the
-/// stage at depth `k` is reached by `k` `Right` steps, plus one `Left` step
-/// unless it is the rightmost stage. A single stage maps directly.
+/// Builds the `map_err` chain placing a stage error at its position in the
+/// right-nested `EitherValidationError` tree over `stages` stages. The stage
+/// at depth `k` takes one `Left` step unless it is the rightmost stage, then
+/// `k` `Right` steps. A single stage maps directly.
+///
+/// Each step passes the variant constructor to `map_err` as a function, so no
+/// constructor is ever called on a value of an uninhabited stage error such
+/// as `Infallible`, which would trip `unreachable_code` in the caller's crate.
 fn stage_error_mapping(stage: usize, stages: usize) -> TokenStream {
     if stages == 1 {
         return TokenStream::new();
     }
 
-    let error_ident = syn::Ident::new("err", proc_macro2::Span::call_site());
-    let core = if stage == stages - 1 {
-        quote! { #error_ident }
-    } else {
-        quote! {
-            ::diesel_builders::EitherValidationError::Left(#error_ident)
-        }
-    };
-    let mut mapping = core;
-    for _ in 0..stage {
-        mapping = quote! {
-            ::diesel_builders::EitherValidationError::Right(#mapping)
-        };
-    }
+    let left = (stage != stages - 1)
+        .then(|| quote! { .map_err(::diesel_builders::EitherValidationError::Left) });
+    let rights = std::iter::repeat_n(
+        quote! { .map_err(::diesel_builders::EitherValidationError::Right) },
+        stage,
+    );
 
-    quote! { .map_err(|#error_ident| #mapping) }
+    quote! { #left #(#rights)* }
 }
 
 /// Builds the `DefaultError` type over the validation stage errors. A single
