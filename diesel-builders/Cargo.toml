@@ -20,10 +20,7 @@ typenum.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-diesel = { workspace = true, features = [
-	"sqlite",
-	"returning_clauses_for_sqlite_3_35",
-] }
+diesel-builders = { path = ".", default-features = false, features = ["sqlite"] }
 rustversion = "1.0.22"
 serde_json.workspace = true
 trybuild = "1.0.114"
@@ -41,3 +38,5 @@ size-64 = ["diesel-builders-derive/size-64", "tuplities/size-64"]
 size-96 = ["diesel-builders-derive/size-96", "tuplities/size-96"]
 size-128 = ["diesel-builders-derive/size-128", "tuplities/size-128"]
 serde = ["dep:serde"]
+sqlite = ["diesel/sqlite", "diesel/returning_clauses_for_sqlite_3_35"]
+postgres = ["diesel/postgres_backend"]

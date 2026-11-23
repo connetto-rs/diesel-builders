@@ -13,6 +13,8 @@ Requires Rust `1.88`.
 
 Tuple-size features select the maximum tuple arity. `size-32` is enabled by default, and disabling all size features limits tuples to eight elements.
 
+Builders insert through the `sqlite` or `postgres` feature, whichever matches the connection's backend. On SQLite a builder reads the inserted row back by its primary key, so a view written through `INSTEAD OF` triggers returns the row as stored, [generated and defaulted columns included](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_view_insert.rs).
+
 [Custom Diesel types](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_custom_type.rs) and [tables with multi-column primary keys](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_composite_primary_key.rs) are supported, as are custom SQL and Rust types [that implement the required Diesel traits](https://github.com/diesel-rs/diesel/blob/main/guide_drafts/custom_types.md).
 
 [Composite-key inheritance](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_composite_inheritance.rs) propagates the complete ancestor key and joins every component. Set key components through the ancestor-column setters.
