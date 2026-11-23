@@ -76,6 +76,7 @@ mod insert_transaction;
 pub mod nested_insert;
 mod stored_row_insert;
 pub use nested_insert::Insert;
+pub use stored_row_insert::{SuppliedKey, SurrogateKey};
 pub mod builder_bundle;
 pub use builder_bundle::{
     BundlableTable, CompletedTableBuilderBundle, RecursiveBundleInsert, TableBuilderBundle,

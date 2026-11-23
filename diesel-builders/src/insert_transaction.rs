@@ -6,6 +6,7 @@ use crate::{
     BuilderResult, HasTableExt, RecursiveBuilderInsert, RecursiveBundleInsert, TableExt,
     TypedNestedTupleCollection,
     columns::{NestedColumns, NestedColumnsCollection},
+    stored_row_insert::PrimaryKeyValues,
 };
 
 /// Recursive builder insertion within an existing transaction.
@@ -16,6 +17,9 @@ pub(crate) trait InsertBuilder<Conn>: HasTableExt {
     /// The validation errors that this insertion stage can still produce.
     type ValidationError;
 
+    /// Writes every row and returns the model of the last one, loading the
+    /// models only once every row exists.
+    ///
     /// # Errors
     ///
     /// Returns the insertion, incomplete, or validation error from any nested
@@ -25,6 +29,9 @@ pub(crate) trait InsertBuilder<Conn>: HasTableExt {
         conn: &mut Conn,
     ) -> BuilderResult<<Self::Table as TableExt>::Model, Self::ValidationError>;
 
+    /// Writes every row and returns the models of every table, loading them
+    /// only once every row exists.
+    ///
     /// # Errors
     ///
     /// Returns the insertion, incomplete, or validation error from any nested
@@ -33,6 +40,18 @@ pub(crate) trait InsertBuilder<Conn>: HasTableExt {
         self,
         conn: &mut Conn,
     ) -> BuilderResult<Self::NestedModels, Self::ValidationError>;
+
+    /// Writes every row without reading any back and returns the primary key
+    /// of the last one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the insertion, incomplete, or validation error from any nested
+    /// builder.
+    fn insert_builder_key(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<PrimaryKeyValues<Self::Table>, Self::ValidationError>;
 }
 
 /// Bundle insertion within an existing transaction.
@@ -40,6 +59,9 @@ pub(crate) trait InsertBundle<Conn>: HasTableExt {
     /// The validation errors that this insertion stage can still produce.
     type ValidationError;
 
+    /// Writes the associated rows and then this row, and returns the model
+    /// of this row.
+    ///
     /// # Errors
     ///
     /// Returns the insertion, incomplete, or validation error from any
@@ -48,6 +70,18 @@ pub(crate) trait InsertBundle<Conn>: HasTableExt {
         self,
         conn: &mut Conn,
     ) -> BuilderResult<<Self::Table as TableExt>::Model, Self::ValidationError>;
+
+    /// Writes the associated rows and then this row without reading any back,
+    /// and returns the primary key of this row.
+    ///
+    /// # Errors
+    ///
+    /// Returns the insertion, incomplete, or validation error from any
+    /// associated record.
+    fn insert_bundle_key(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<PrimaryKeyValues<Self::Table>, Self::ValidationError>;
 }
 
 /// A borrowed view of stored column options, used to check completeness

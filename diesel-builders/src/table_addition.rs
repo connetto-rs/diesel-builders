@@ -43,6 +43,10 @@ pub trait TableExt:
     /// The columns of this table with an explicit `default` attribute,
     /// excluding surrogate primary keys.
     type DefaultColumns: NestedColumns;
+    /// Where an insert finds the primary key of the row it writes, either
+    /// [`SuppliedKey`](crate::SuppliedKey) or
+    /// [`SurrogateKey`](crate::SurrogateKey).
+    type KeySource;
 
     /// Returns the default values for the new record.
     ///

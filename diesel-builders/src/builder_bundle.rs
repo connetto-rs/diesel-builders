@@ -13,12 +13,11 @@ use tuplities::prelude::*;
 
 use crate::{
     BuildableTable, ColumnTyped, Columns, DiscretionarySameAsIndex, HasNestedTables,
-    HorizontalNestedKeys, MandatorySameAsIndex, MayGetColumn, NestedBuildableTables,
-    NestedTableModels, NestedTables, SetColumn, SetDiscretionaryBuilder,
-    SetDiscretionarySameAsNestedColumns, SetMandatoryBuilder, SetMandatorySameAsNestedColumns,
-    TableBuilder, TableExt, TrySetColumn, TrySetDiscretionaryBuilder,
-    TrySetDiscretionarySameAsColumn, TrySetMandatoryBuilder, TrySetMandatorySameAsColumn,
-    TupleGetNestedColumns, TupleMayGetNestedColumns, TypedColumn, TypedNestedTuple, ValidateColumn,
+    HorizontalNestedKeys, MandatorySameAsIndex, MayGetColumn, NestedBuildableTables, SetColumn,
+    SetDiscretionaryBuilder, SetDiscretionarySameAsNestedColumns, SetMandatoryBuilder,
+    SetMandatorySameAsNestedColumns, TableBuilder, TableExt, TrySetColumn,
+    TrySetDiscretionaryBuilder, TrySetDiscretionarySameAsColumn, TrySetMandatoryBuilder,
+    TrySetMandatorySameAsColumn, TypedColumn, TypedNestedTuple, ValidateColumn,
     ValidateStoredValues, columns::NestedColumns,
     horizontal_same_as_group::HorizontalSameAsGroupExt, tables::NonCompositePrimaryKeyNestedTables,
 };
@@ -46,7 +45,6 @@ pub trait BundlableTableExt:
     /// Nested mandatory tables.
     type NestedMandatoryTables: NonCompositePrimaryKeyNestedTables<
             NestedPrimaryKeyColumns = Self::NestedMandatoryPrimaryKeys,
-            NestedModels = Self::NestedMandatoryModels,
         > + NestedBuildableTables;
     /// Nested discretionary triangular same-as columns.
     type NestedDiscretionaryTriangularColumns: NestedColumns<
@@ -55,8 +53,6 @@ pub trait BundlableTableExt:
     /// Nested discretionary tables.
     type NestedDiscretionaryTables: NonCompositePrimaryKeyNestedTables<
             NestedPrimaryKeyColumns = Self::NestedDiscretionaryPrimaryKeys,
-            NestedModels = Self::NestedDiscretionaryModels,
-            OptionalNestedModels = Self::OptionalNestedDiscretionaryModels,
         > + NestedBuildableTables;
     /// Nested mandatory foreign primary keys.
     type NestedMandatoryPrimaryKeys: NestedColumns<
@@ -89,18 +85,6 @@ pub trait BundlableTableExt:
     /// Optional builders for the discretionary associated tables.
     type OptionalDiscretionaryNestedBuilders: NestedTupleOption<Transposed = Self::DiscretionaryNestedBuilders>
         + HasNestedTables<NestedTables = Self::NestedDiscretionaryTables>;
-    /// The nested mandatory models.
-    type NestedMandatoryModels: NestedTableModels<NestedTables = Self::NestedMandatoryTables>
-        + TupleGetNestedColumns<Self::NestedMandatoryPrimaryKeys>;
-    /// The nested discretionary models.
-    type NestedDiscretionaryModels: NestedTableModels<
-            IntoOptions = Self::OptionalNestedDiscretionaryModels,
-            NestedTables = Self::NestedDiscretionaryTables,
-        > + TupleGetNestedColumns<Self::NestedDiscretionaryPrimaryKeys>;
-    /// The nested optional discretionary models.
-    type OptionalNestedDiscretionaryModels: TupleMayGetNestedColumns<
-        Self::NestedDiscretionaryPrimaryKeys,
-    >;
 }
 
 impl<T> BundlableTableExt for T
@@ -135,11 +119,6 @@ where
         <Self::NestedDiscretionaryTables as NestedBuildableTables>::NestedBuilders;
     type OptionalDiscretionaryNestedBuilders =
         <Self::DiscretionaryNestedBuilders as IntoNestedTupleOption>::IntoOptions;
-    type NestedMandatoryModels = <Self::NestedMandatoryTables as NestedTables>::NestedModels;
-    type NestedDiscretionaryModels =
-        <Self::NestedDiscretionaryTables as NestedTables>::NestedModels;
-    type OptionalNestedDiscretionaryModels =
-        <Self::NestedDiscretionaryModels as IntoNestedTupleOption>::IntoOptions;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

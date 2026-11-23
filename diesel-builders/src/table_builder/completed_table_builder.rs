@@ -11,13 +11,14 @@ use tuplities::prelude::{
 use crate::{
     AncestorOfIndex, BuildableTable, BuilderError, BuilderResult, BundlableTable,
     CompletedTableBuilderBundle, DescendantOf, DescendantWithSelf, EitherValidationError,
-    GetNestedColumns, HasNestedTables, HasTableExt, IncompleteBuilderError, Insert, NestedColumns,
-    NestedTables, TableBuilder, TableExt, TrySetColumn, TypedColumn, TypedNestedTuple,
-    TypedNestedTupleCollection, ValidateColumn, VerticalSameAsGroup,
+    HasNestedTables, HasTableExt, IncompleteBuilderError, Insert, NestedColumns, NestedTables,
+    TableBuilder, TableExt, TrySetColumn, TypedColumn, TypedNestedTupleCollection, ValidateColumn,
+    VerticalSameAsGroup,
     columns::{NestedColumnsCollection, NonEmptyNestedProjection},
     insert_transaction::{
         InsertBuilder, InsertBundle, SetTableKeyColumns, SetTableKeyColumnsCollection,
     },
+    stored_row_insert::{LoadStoredRow, PrimaryKeyValues},
 };
 
 /// A completed builder for creating insertable models for a Diesel table and
@@ -149,6 +150,18 @@ where
             T::NestedCompletedAncestorBuilders,
         > = self.try_into()?;
         completed_builder.insert_builder_nested(conn)
+    }
+
+    fn insert_builder_key(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<PrimaryKeyValues<T>, Self::ValidationError> {
+        let completed_builder: RecursiveTableBuilder<
+            T,
+            typenum::U0,
+            T::NestedCompletedAncestorBuilders,
+        > = self.try_into()?;
+        completed_builder.insert_builder_key(conn)
     }
 }
 
@@ -307,6 +320,12 @@ where
     ) -> BuilderResult<Self::NestedModels, Self::ValidationError> {
         self.nested_bundles.0.insert_bundle(conn).map(|model| (model,))
     }
+    fn insert_builder_key(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<PrimaryKeyValues<Head::Table>, Self::ValidationError> {
+        self.nested_bundles.0.insert_bundle_key(conn)
+    }
 }
 
 // Recursive case: nested 2-tuple (Head, Tail) where Tail is itself a nested
@@ -316,109 +335,132 @@ impl<T, Depth, Conn, Head, Tail> InsertBuilder<Conn>
 where
     T: TableExt,
     Conn: diesel::connection::LoadConnection,
-    Head: InsertBundle<Conn> + HasTable,
+    Head: InsertBundle<Conn> + HasTable<Table: LoadStoredRow<Conn>>,
     Tail: FlattenNestedTuple + HasNestedTables,
-    <Head::Table as TableExt>::Model:
-        GetNestedColumns<<Head::Table as TableExt>::NestedPrimaryKeyColumns>,
-    // Tail: HasNestedTables (moved into the combined bound above)
     Depth: core::ops::Add<typenum::U1>,
-    RecursiveTableBuilder<T, typenum::Sum<Depth, typenum::U1>, Tail>:
-        InsertBuilder<
+    NextBuilder<T, Depth, Tail>: InsertBuilder<
             Conn,
             Table = T,
             NestedModels = <Tail::NestedTables as NestedTables>::NestedModels,
-        >
-            + SetTableKeyColumnsCollection<
-                <Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection,
-            >,
-    <Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection: NestedColumnsCollection<
-        NestedCollectionType: NestedTupleReplicate<
-            <<Head::Table as TableExt>::NestedPrimaryKeyColumns as TypedNestedTuple>::NestedTupleColumnType,
+        > + SetTableKeyColumnsCollection<
+            <Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection,
         >,
-    >,
+    <Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection:
+        NestedColumnsCollection<
+            NestedCollectionType: NestedTupleReplicate<PrimaryKeyValues<Head::Table>>,
+        >,
+    PrimaryKeyValues<Head::Table>: Clone,
 {
-    type NestedModels = (
-        <Head::Table as TableExt>::Model,
-        <Tail::NestedTables as NestedTables>::NestedModels,
-    );
+    type NestedModels =
+        (<Head::Table as TableExt>::Model, <Tail::NestedTables as NestedTables>::NestedModels);
     type ValidationError = EitherValidationError<
         <Head as InsertBundle<Conn>>::ValidationError,
         EitherValidationError<
-            <
-                RecursiveTableBuilder<T, typenum::Sum<Depth, typenum::U1>, Tail> as SetTableKeyColumnsCollection<
-                    <Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection,
-                >
-            >::Error,
-            <
-                RecursiveTableBuilder<T, typenum::Sum<Depth, typenum::U1>, Tail> as InsertBuilder<
-                    Conn,
-                >
-            >::ValidationError,
+            TailKeyError<T, Depth, Tail>,
+            <NextBuilder<T, Depth, Tail> as InsertBuilder<Conn>>::ValidationError,
         >,
     >;
 
     #[inline]
-    fn insert_builder(
-        self,
-        conn: &mut Conn,
-    ) -> BuilderResult<T::Model, Self::ValidationError> {
-        // Insert the first table and get its model (with primary keys)
-        let first = self.nested_bundles.0;
-        let model: <Head::Table as TableExt>::Model = first
-            .insert_bundle(conn)
+    fn insert_builder(self, conn: &mut Conn) -> BuilderResult<T::Model, Self::ValidationError> {
+        let (head, tail) = self.nested_bundles;
+        let key = head
+            .insert_bundle_key(conn)
             .map_err(|error| error.map_validation(EitherValidationError::Left))?;
-        // Extract primary keys and set them in the tail builder
-        let mut tail_builder: RecursiveTableBuilder<T, typenum::Sum<Depth, typenum::U1>, Tail> =
-            RecursiveTableBuilder::from_nested_bundles(self.nested_bundles.1);
-        tail_builder
-            .set_table_key_columns_collection(
-                <<<Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection as TypedNestedTupleCollection>::NestedCollectionType as NestedTupleReplicate<
-                    <<Head::Table as TableExt>::NestedPrimaryKeyColumns as TypedNestedTuple>::NestedTupleColumnType,
-                >>::nested_tuple_replicate(model.get_nested_columns()),
-            )
-            .map_err(|error| {
+        let tail_builder =
+            tail_with_head_key::<T, Depth, Head::Table, Tail>(tail, key).map_err(|error| {
                 BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Left(
                     error,
                 )))
             })?;
-        // Recursively insert the tail
-        tail_builder
-            .insert_builder(conn)
-            .map_err(|error| error.map_validation(|error| {
+        tail_builder.insert_builder(conn).map_err(|error| {
+            error.map_validation(|error| {
                 EitherValidationError::Right(EitherValidationError::Right(error))
-            }))
+            })
+        })
     }
 
-    fn insert_builder_nested(self, conn: &mut Conn) -> BuilderResult<Self::NestedModels, Self::ValidationError> {
-        // Insert the first table and get its model (with primary keys)
-        let first = self.nested_bundles.0;
-        let model: <Head::Table as TableExt>::Model = first
-            .insert_bundle(conn)
+    fn insert_builder_nested(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<Self::NestedModels, Self::ValidationError> {
+        let (head, tail) = self.nested_bundles;
+        let key = head
+            .insert_bundle_key(conn)
             .map_err(|error| error.map_validation(EitherValidationError::Left))?;
-        // Extract primary keys and set them in the tail builder
-        let mut tail_builder: RecursiveTableBuilder<T, typenum::Sum<Depth, typenum::U1>, Tail> =
-            RecursiveTableBuilder::from_nested_bundles(self.nested_bundles.1);
-        tail_builder
-            .set_table_key_columns_collection(
-                <<<Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection as TypedNestedTupleCollection>::NestedCollectionType as NestedTupleReplicate<
-                    <<Head::Table as TableExt>::NestedPrimaryKeyColumns as TypedNestedTuple>::NestedTupleColumnType,
-                >>::nested_tuple_replicate(model.get_nested_columns()),
-            )
+        // The tail and the head model each need their own copy of the key.
+        let tail_builder = tail_with_head_key::<T, Depth, Head::Table, Tail>(tail, key.clone())
             .map_err(|error| {
                 BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Left(
                     error,
                 )))
             })?;
-        // Recursively insert the tail
-        Ok((
-            model,
-            tail_builder
-                .insert_builder_nested(conn)
-                .map_err(|error| error.map_validation(|error| {
-                    EitherValidationError::Right(EitherValidationError::Right(error))
-                }))?,
-        ))
+        let tail = tail_builder.insert_builder_nested(conn).map_err(|error| {
+            error.map_validation(|error| {
+                EitherValidationError::Right(EitherValidationError::Right(error))
+            })
+        })?;
+        // The head row is read only once every row of the insert exists.
+        let model = <Head::Table as LoadStoredRow<Conn>>::load_stored_row(key, conn)?;
+        Ok((model, tail))
     }
+
+    fn insert_builder_key(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<PrimaryKeyValues<T>, Self::ValidationError> {
+        let (head, tail) = self.nested_bundles;
+        let key = head
+            .insert_bundle_key(conn)
+            .map_err(|error| error.map_validation(EitherValidationError::Left))?;
+        let tail_builder =
+            tail_with_head_key::<T, Depth, Head::Table, Tail>(tail, key).map_err(|error| {
+                BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Left(
+                    error,
+                )))
+            })?;
+        tail_builder.insert_builder_key(conn).map_err(|error| {
+            error.map_validation(|error| {
+                EitherValidationError::Right(EitherValidationError::Right(error))
+            })
+        })
+    }
+}
+
+/// The builder of the tables after the head of a nested insert.
+type NextBuilder<T, Depth, Tail> = RecursiveTableBuilder<T, typenum::Sum<Depth, typenum::U1>, Tail>;
+
+/// The error of handing the head's primary key to the tables of the tail.
+type TailKeyError<T, Depth, Tail> = <NextBuilder<T, Depth, Tail> as SetTableKeyColumnsCollection<
+    <<Tail as HasNestedTables>::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection,
+>>::Error;
+
+/// Hands the primary key of the head row to every table of the tail.
+fn tail_with_head_key<T, Depth, HeadTable, Tail>(
+    tail: Tail,
+    key: PrimaryKeyValues<HeadTable>,
+) -> Result<NextBuilder<T, Depth, Tail>, TailKeyError<T, Depth, Tail>>
+where
+    T: diesel::Table,
+    HeadTable: TableExt,
+    Tail: HasNestedTables,
+    Depth: core::ops::Add<typenum::U1>,
+    NextBuilder<T, Depth, Tail>: SetTableKeyColumnsCollection<
+        <Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection,
+    >,
+    <Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection:
+        NestedColumnsCollection<
+            NestedCollectionType: NestedTupleReplicate<PrimaryKeyValues<HeadTable>>,
+        >,
+{
+    let mut tail_builder: NextBuilder<T, Depth, Tail> =
+        RecursiveTableBuilder::from_nested_bundles(tail);
+    tail_builder.set_table_key_columns_collection(
+        <<<Tail::NestedTables as NestedTables>::NestedPrimaryKeyColumnsCollection as TypedNestedTupleCollection>::NestedCollectionType as NestedTupleReplicate<
+            PrimaryKeyValues<HeadTable>,
+        >>::nested_tuple_replicate(key),
+    )?;
+    Ok(tail_builder)
 }
 
 impl<T> TryFrom<TableBuilder<T>>

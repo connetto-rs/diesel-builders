@@ -1,20 +1,18 @@
 //! Submodule for the completed table builder bundle and related impls.
 
-use diesel::{Column, Insertable, associations::HasTable};
+use diesel::{Column, associations::HasTable};
 use tuplities::prelude::*;
 
 use crate::{
-    BuildableTable, BuilderError, BuilderResult, DiscretionarySameAsIndex, EitherValidationError,
-    HasNestedTables, HasTableExt, IncompleteBuilderError, MandatorySameAsIndex, NestedColumns,
-    NestedTables, TableBuilder, TableBuilderBundle, TableExt, TryMaySetValues, TrySetColumn,
-    TrySetDiscretionarySameAsColumn, TrySetMandatorySameAsColumn, TrySetValues,
-    TupleGetNestedColumns, TupleMayGetNestedColumns, TypedColumn, TypedNestedTuple, ValidateColumn,
-    ValidateRecord,
+    BuildableTable, BuilderError, BuilderResult, ColumnTyped, DiscretionarySameAsIndex,
+    EitherValidationError, HasPrimaryKeyColumn, HasTableExt, IncompleteBuilderError,
+    MandatorySameAsIndex, NestedColumns, TableBuilder, TableBuilderBundle, TableExt,
+    TryMaySetValues, TrySetColumn, TrySetDiscretionarySameAsColumn, TrySetMandatorySameAsColumn,
+    TrySetValues, TypedColumn, ValidateColumn, ValidateRecord,
     builder_bundle::{BundlableTableExt, impl_bundle_shared},
-    columns::TupleEqAll,
     horizontal_same_as_group::HorizontalSameAsGroupExt,
     insert_transaction::{CheckNestedStoredOptions, InsertBuilder, InsertBundle},
-    stored_row_insert::InsertStoredRow,
+    stored_row_insert::{InsertStoredRow, InsertValues, PrimaryKeyValues, WriteRow},
 };
 
 #[derive(Debug)]
@@ -148,7 +146,44 @@ pub trait RecursiveBundleInsert<Error, Conn>: HasTableExt {
     ) -> BuilderResult<<<Self as HasTable>::Table as TableExt>::Model, Error>;
 }
 
-impl<T, Conn, MandatoryError, DiscretionaryError> InsertBundle<Conn>
+/// Writing the associated rows of a bundle and completing its record.
+pub(crate) trait PrepareInsert<Conn>: HasTableExt {
+    /// The validation errors that this stage can produce.
+    type ValidationError;
+
+    /// Writes the associated rows, sets their keys, and validates the
+    /// completed record, returning the new values of this row.
+    ///
+    /// # Errors
+    ///
+    /// Returns the insertion, incomplete, or validation error from any
+    /// associated record or from this record.
+    fn prepare_insert(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<<Self::Table as TableExt>::NewValues, Self::ValidationError>;
+}
+
+/// The validation errors that inserting a bundle of `T` can produce.
+type BundleValidationError<T, MandatoryError, DiscretionaryError> = EitherValidationError<
+    MandatoryError,
+    EitherValidationError<
+        <<T as TableExt>::NewValues as TrySetValues<
+            <T as BundlableTableExt>::NestedMandatoryTriangularColumns,
+        >>::Error,
+        EitherValidationError<
+            DiscretionaryError,
+            EitherValidationError<
+                <<T as TableExt>::NewValues as TryMaySetValues<
+                    <T as BundlableTableExt>::NestedDiscretionaryTriangularColumns,
+                >>::Error,
+                <T as TableExt>::RecordError,
+            >,
+        >,
+    >,
+>;
+
+impl<T, Conn, MandatoryError, DiscretionaryError> PrepareInsert<Conn>
     for CompletedTableBuilderBundle<T>
 where
     Conn: diesel::connection::LoadConnection,
@@ -161,50 +196,33 @@ where
             &'static str,
             SameDepth = <T::NewRecord as NestedColumns>::NestedNames,
         >,
-    T::MandatoryNestedBuilders: InsertTuple<Conn, ValidationError = MandatoryError>,
-    T::OptionalDiscretionaryNestedBuilders:
-        InsertOptionTuple<Conn, ValidationError = DiscretionaryError>,
-    T::NewRecord: TupleEqAll<EqAll: FlattenNestedTuple<Flattened: Insertable<T>>>
-        + TypedNestedTuple<NestedTupleColumnType = T::CompletedNewValues>,
-    Conn::Backend: InsertStoredRow<
+    T::MandatoryNestedBuilders: InsertTuple<
             Conn,
-            T,
-            <<T::NewRecord as TupleEqAll>::EqAll as FlattenNestedTuple>::Flattened,
+            Keys = T::NestedMandatoryPrimaryKeyTypes,
+            ValidationError = MandatoryError,
+        >,
+    T::OptionalDiscretionaryNestedBuilders: InsertOptionTuple<
+            Conn,
+            Keys = T::OptionalNestedDiscretionaryPrimaryKeyTypes,
+            ValidationError = DiscretionaryError,
         >,
 {
-    type ValidationError =
-        EitherValidationError<
-            MandatoryError,
-            EitherValidationError<
-                <T::NewValues as TrySetValues<T::NestedMandatoryTriangularColumns>>::Error,
-                EitherValidationError<
-                    DiscretionaryError,
-                    EitherValidationError<
-                        <T::NewValues as TryMaySetValues<
-                            T::NestedDiscretionaryTriangularColumns,
-                        >>::Error,
-                        <T as TableExt>::RecordError,
-                    >,
-                >,
-            >,
-        >;
+    type ValidationError = BundleValidationError<T, MandatoryError, DiscretionaryError>;
 
-    fn insert_bundle(
+    fn prepare_insert(
         mut self,
         conn: &mut Conn,
-    ) -> BuilderResult<<T as TableExt>::Model, Self::ValidationError> {
-        let mandatory_models: T::NestedMandatoryModels = self
-            .nested_mandatory_associated_builders
-            .insert_tuple(conn)
-            .map_err(|error| error.map_validation(EitherValidationError::Left))?;
-        let mandatory_primary_keys: T::NestedMandatoryPrimaryKeyTypes =
-            mandatory_models.tuple_get_nested_columns();
+    ) -> BuilderResult<T::NewValues, Self::ValidationError> {
+        let mandatory_primary_keys =
+            self.nested_mandatory_associated_builders
+                .insert_tuple(conn)
+                .map_err(|error| error.map_validation(EitherValidationError::Left))?;
         self.insertable_model.try_set_values(mandatory_primary_keys).map_err(|(_, error)| {
             BuilderError::Validation(EitherValidationError::Right(EitherValidationError::Left(
                 error,
             )))
         })?;
-        let discretionary_models: T::OptionalNestedDiscretionaryModels = self
+        let discretionary_primary_keys = self
             .nested_discretionary_associated_builders
             .insert_option_tuple(conn)
             .map_err(|error| {
@@ -214,8 +232,6 @@ where
                     ))
                 })
             })?;
-        let discretionary_primary_keys: T::OptionalNestedDiscretionaryPrimaryKeyTypes =
-            discretionary_models.tuple_may_get_nested_columns();
         self.insertable_model.try_may_set_values(discretionary_primary_keys).map_err(
             |(_, error)| {
                 BuilderError::Validation(EitherValidationError::Right(
@@ -245,44 +261,59 @@ where
             )))
         })?;
 
-        let columns = T::NewRecord::default();
-        #[expect(
-            clippy::expect_used,
-            reason = "the earlier first_missing_with check already proved every \
-                      required column is present, and nothing mutates insertable_model \
-                      in between, so transpose_or cannot observe a missing column here"
-        )]
-        let values: T::CompletedNewValues = self
-            .insertable_model
-            .transpose_or(T::NewRecord::NESTED_COLUMN_NAMES)
-            .expect("every required column was already proven present");
-
-        Ok(<Conn::Backend as InsertStoredRow<Conn, T, _>>::insert_stored_row(
-            columns.eq_all(values).flatten(),
-            conn,
-        )?)
+        Ok(self.insertable_model)
     }
 }
 
+impl<T, Conn> InsertBundle<Conn> for CompletedTableBuilderBundle<T>
+where
+    Conn: diesel::Connection,
+    T: InsertValues,
+    Self: PrepareInsert<Conn, Table = T>,
+    T::KeySource: WriteRow<Conn, T>,
+    Conn::Backend: InsertStoredRow<Conn, T>,
+{
+    type ValidationError = <Self as PrepareInsert<Conn>>::ValidationError;
+
+    fn insert_bundle(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<<T as TableExt>::Model, Self::ValidationError> {
+        let new_values = self.prepare_insert(conn)?;
+        Ok(<Conn::Backend as InsertStoredRow<Conn, T>>::insert_stored_row(new_values, conn)?)
+    }
+
+    fn insert_bundle_key(
+        self,
+        conn: &mut Conn,
+    ) -> BuilderResult<PrimaryKeyValues<T>, Self::ValidationError> {
+        let new_values = self.prepare_insert(conn)?;
+        Ok(<T::KeySource as WriteRow<Conn, T>>::write_row(new_values, conn)?)
+    }
+}
+
+/// The value of the primary key column of `T`.
+type PrimaryKeyValue<T> = <<T as diesel::Table>::PrimaryKey as ColumnTyped>::ColumnType;
+
 /// Trait defining the insertion of a tuple of builders into the database.
-trait InsertTuple<Conn>: HasNestedTables {
+trait InsertTuple<Conn> {
+    /// The primary keys of the rows the tuple's builders write.
+    type Keys;
     /// The validation errors of the tuple's builders.
     type ValidationError;
 
+    /// Writes the rows of the tuple's builders and returns their primary
+    /// keys.
+    ///
     /// # Errors
     ///
     /// Returns an error if any insertion fails, if any remaining validation
     /// fails, or if any database constraints are violated.
-    fn insert_tuple(
-        self,
-        conn: &mut Conn,
-    ) -> BuilderResult<<Self::NestedTables as NestedTables>::NestedModels, Self::ValidationError>;
+    fn insert_tuple(self, conn: &mut Conn) -> BuilderResult<Self::Keys, Self::ValidationError>;
 }
 
-impl<Conn> InsertTuple<Conn> for ()
-where
-    Conn: diesel::connection::LoadConnection,
-{
+impl<Conn> InsertTuple<Conn> for () {
+    type Keys = ();
     type ValidationError = std::convert::Infallible;
 
     #[inline]
@@ -293,48 +324,33 @@ where
 
 impl<Conn, T> InsertTuple<Conn> for (T,)
 where
-    Conn: diesel::connection::LoadConnection,
-    T: InsertBuilder<Conn> + HasTableExt,
+    T: InsertBuilder<Conn, Table: HasPrimaryKeyColumn>,
 {
+    type Keys = (PrimaryKeyValue<T::Table>,);
     type ValidationError = <T as InsertBuilder<Conn>>::ValidationError;
 
     #[inline]
-    fn insert_tuple(
-        self,
-        conn: &mut Conn,
-    ) -> BuilderResult<<Self::NestedTables as NestedTables>::NestedModels, Self::ValidationError>
-    {
-        Ok((self.0.insert_builder(conn)?,))
+    fn insert_tuple(self, conn: &mut Conn) -> BuilderResult<Self::Keys, Self::ValidationError> {
+        self.0.insert_builder_key(conn)
     }
 }
 
 impl<Conn, Head, Tail> InsertTuple<Conn> for (Head, Tail)
 where
-    Conn: diesel::connection::LoadConnection,
-    Head: InsertBuilder<Conn> + HasTableExt,
+    Head: InsertBuilder<Conn, Table: HasPrimaryKeyColumn>,
     Tail: InsertTuple<Conn>,
-    (Head, Tail): HasNestedTables,
-    Self::NestedTables: NestedTables<
-        NestedModels = (
-            <<Head as HasTable>::Table as TableExt>::Model,
-            <Tail::NestedTables as NestedTables>::NestedModels,
-        ),
-    >,
 {
+    type Keys = (PrimaryKeyValue<Head::Table>, Tail::Keys);
     type ValidationError = EitherValidationError<
         <Head as InsertBuilder<Conn>>::ValidationError,
         <Tail as InsertTuple<Conn>>::ValidationError,
     >;
 
     #[inline]
-    fn insert_tuple(
-        self,
-        conn: &mut Conn,
-    ) -> BuilderResult<<Self::NestedTables as NestedTables>::NestedModels, Self::ValidationError>
-    {
-        let head = self
+    fn insert_tuple(self, conn: &mut Conn) -> BuilderResult<Self::Keys, Self::ValidationError> {
+        let (head,) = self
             .0
-            .insert_builder(conn)
+            .insert_builder_key(conn)
             .map_err(|error| error.map_validation(EitherValidationError::Left))?;
         let tail = self
             .1
@@ -346,13 +362,15 @@ where
 
 /// Trait defining the insertion of a tuple of optional builders into the
 /// database.
-trait InsertOptionTuple<Conn>: HasNestedTables {
+trait InsertOptionTuple<Conn> {
+    /// The primary keys of the rows the tuple's builders write, `None` for
+    /// every absent builder.
+    type Keys;
     /// The validation errors of the tuple's optional builders.
     type ValidationError;
 
-    /// Insert the tuple of optional builders' data into the database using
-    /// the provided connection. If a builder is `None`, the corresponding
-    /// model will also be `None`.
+    /// Writes the rows of the present builders and returns their primary
+    /// keys.
     ///
     /// # Errors
     ///
@@ -361,43 +379,33 @@ trait InsertOptionTuple<Conn>: HasNestedTables {
     fn insert_option_tuple(
         self,
         conn: &mut Conn,
-    ) -> BuilderResult<
-        <Self::NestedTables as NestedTables>::OptionalNestedModels,
-        Self::ValidationError,
-    >;
+    ) -> BuilderResult<Self::Keys, Self::ValidationError>;
 }
 
 impl<Conn> InsertOptionTuple<Conn> for () {
+    type Keys = ();
     type ValidationError = std::convert::Infallible;
 
     #[inline]
-    fn insert_option_tuple(
-        self,
-        _conn: &mut Conn,
-    ) -> BuilderResult<
-        <Self::NestedTables as NestedTables>::OptionalNestedModels,
-        Self::ValidationError,
-    > {
+    fn insert_option_tuple(self, _conn: &mut Conn) -> BuilderResult<(), Self::ValidationError> {
         Ok(())
     }
 }
 
 impl<Conn, T> InsertOptionTuple<Conn> for (Option<T>,)
 where
-    T: InsertBuilder<Conn> + HasTable,
+    T: InsertBuilder<Conn, Table: HasPrimaryKeyColumn>,
 {
+    type Keys = (Option<PrimaryKeyValue<T::Table>>,);
     type ValidationError = <T as InsertBuilder<Conn>>::ValidationError;
 
     #[inline]
     fn insert_option_tuple(
         self,
         conn: &mut Conn,
-    ) -> BuilderResult<
-        <Self::NestedTables as NestedTables>::OptionalNestedModels,
-        Self::ValidationError,
-    > {
+    ) -> BuilderResult<Self::Keys, Self::ValidationError> {
         Ok((match self.0 {
-            Some(builder) => Some(builder.insert_builder(conn)?),
+            Some(builder) => Some(builder.insert_builder_key(conn)?.0),
             None => None,
         },))
     }
@@ -405,16 +413,10 @@ where
 
 impl<Conn, Head, Tail> InsertOptionTuple<Conn> for (Option<Head>, Tail)
 where
-    Head: InsertBuilder<Conn>,
+    Head: InsertBuilder<Conn, Table: HasPrimaryKeyColumn>,
     Tail: InsertOptionTuple<Conn>,
-    (Option<Head>, Tail): HasNestedTables,
-    Self::NestedTables: NestedTables<
-        OptionalNestedModels = (
-            Option<<Head::Table as TableExt>::Model>,
-            <Tail::NestedTables as NestedTables>::OptionalNestedModels,
-        ),
-    >,
 {
+    type Keys = (Option<PrimaryKeyValue<Head::Table>>, Tail::Keys);
     type ValidationError = EitherValidationError<
         <Head as InsertBuilder<Conn>>::ValidationError,
         <Tail as InsertOptionTuple<Conn>>::ValidationError,
@@ -424,16 +426,14 @@ where
     fn insert_option_tuple(
         self,
         conn: &mut Conn,
-    ) -> BuilderResult<
-        <Self::NestedTables as NestedTables>::OptionalNestedModels,
-        Self::ValidationError,
-    > {
+    ) -> BuilderResult<Self::Keys, Self::ValidationError> {
         let head = match self.0 {
             Some(builder) => {
                 Some(
                     builder
-                        .insert_builder(conn)
-                        .map_err(|error| error.map_validation(EitherValidationError::Left))?,
+                        .insert_builder_key(conn)
+                        .map_err(|error| error.map_validation(EitherValidationError::Left))?
+                        .0,
                 )
             }
             None => None,
