@@ -2,7 +2,7 @@
 
 use crate::{
     OptionalRef, SameAsReceiver, TableExt, TypedColumn, ValidateColumn,
-    columns::{HomogeneouslyTypedNestedColumns, NonEmptyNestedProjection},
+    columns::{HomogeneouslyTypedNestedColumns, NestedColumns},
     mutation::{MutationContext, PrepareColumn, PrepareHomogeneous},
 };
 
@@ -79,10 +79,8 @@ where
     CHead: TypedColumn,
     CHead::ColumnType: SameAsReceiver<CHead::ValueType>,
     CTail: HomogeneouslyTypedNestedColumns<Type>,
-    (CHead, CTail): NonEmptyNestedProjection<
-            NestedTupleValueType = (CHead::ValueType, CTail::NestedTupleValueType),
-            NestedTupleColumnType = (CHead::ColumnType, CTail::NestedTupleColumnType),
-        >,
+    (CHead, CTail): HomogeneouslyTypedNestedColumns<Type>
+        + NestedColumns<NestedTupleColumnType = (CHead::ColumnType, CTail::NestedTupleColumnType)>,
     T: PrepareColumn<CHead> + PrepareHomogeneous<Error, Type, CTail>,
     Error: From<<T as ValidateColumn<CHead>>::Error>,
 {

@@ -2,8 +2,7 @@
 
 use crate::{
     OptionalRef, SameAsReceiver, SetColumn, TableExt, TypedColumn,
-    columns::{HomogeneouslyTypedNestedColumns, NonEmptyNestedProjection},
-    horizontal_same_as::receive_same_as_value,
+    columns::HomogeneouslyTypedNestedColumns, horizontal_same_as::receive_same_as_value,
 };
 
 /// Trait indicating a builder can set multiple columns.
@@ -65,9 +64,7 @@ where
     CHead: TypedColumn,
     CTail: HomogeneouslyTypedNestedColumns<Type>,
     CHead::ColumnType: SameAsReceiver<CHead::ValueType>,
-    (CHead, CTail): NonEmptyNestedProjection<
-        NestedTupleValueType = (CHead::ValueType, CTail::NestedTupleValueType),
-    >,
+    (CHead, CTail): HomogeneouslyTypedNestedColumns<Type>,
     T: SetColumn<CHead> + SetHomogeneousNestedColumns<Type, CTail>,
 {
     #[inline]
