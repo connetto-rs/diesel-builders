@@ -8,7 +8,9 @@
 
 // Error handling helpers
 pub mod builder_error;
-pub use builder_error::{BuilderError, BuilderResult, IncompleteBuilderError};
+pub use builder_error::{
+    BuilderError, BuilderResult, GeneratedValueMismatch, IncompleteBuilderError,
+};
 
 // Re-exported modules from diesel-additions
 pub mod tables;
@@ -74,7 +76,7 @@ pub mod set_builder;
 pub use set_builder::*;
 mod insert_row;
 mod insert_transaction;
-pub use insert_row::NewRecordColumn;
+pub use insert_row::{InsertPolicy, NewRecordColumn};
 pub mod nested_insert;
 mod stored_row_insert;
 pub use nested_insert::Insert;

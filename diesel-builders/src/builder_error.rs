@@ -2,6 +2,8 @@
 
 use diesel::result::DatabaseErrorInformation;
 
+use crate::{OptionalRef, TableExt, TypedColumn};
+
 /// Error type for incomplete builder operations.
 #[derive(Debug)]
 pub enum BuilderError<E> {
@@ -94,6 +96,86 @@ pub enum DynamicColumnError {
     #[error("Validation error: {0}")]
     /// Validation error when setting the column.
     Validation(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+/// A column generated as a constant, through `#[table_model(generated =
+/// <value>)]`, was given a value other than its constant.
+///
+/// Handing a key down a chain of tables writes the ancestor's key into every
+/// descendant, so a descendant whose constant differs from its ancestor's
+/// fails with this error before its row is written, and the insert's
+/// transaction discards the ancestor rows.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, thiserror::Error)]
+#[error("`{table_name}.{column_name}` is generated as a constant and cannot hold another value")]
+pub struct GeneratedValueMismatch {
+    /// The table of the generated column.
+    pub table_name: &'static str,
+    /// The name of the generated column.
+    pub column_name: &'static str,
+}
+
+impl GeneratedValueMismatch {
+    /// Accepts `value` only when it equals the column's constant `expected`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the mismatch naming the column when `value` differs from
+    /// `expected`.
+    ///
+    /// ```
+    /// # include!("doctest_setup.rs");
+    /// # fn main() {
+    /// use diesel_builders::GeneratedValueMismatch;
+    /// use schema::users;
+    ///
+    /// assert_eq!(GeneratedValueMismatch::check::<users::age>(&18, &18), Ok(()));
+    /// assert_eq!(
+    ///     GeneratedValueMismatch::check::<users::age>(&18, &19),
+    ///     Err(GeneratedValueMismatch { table_name: "users", column_name: "age" })
+    /// );
+    /// # }
+    /// ```
+    pub fn check<C>(expected: &C::ColumnType, value: &C::ValueType) -> Result<(), Self>
+    where
+        C: TypedColumn<Table: TableExt>,
+        C::ValueType: PartialEq,
+    {
+        if expected.as_optional_ref() == Some(value) {
+            Ok(())
+        } else {
+            Err(Self { table_name: <C::Table as TableExt>::TABLE_NAME, column_name: C::NAME })
+        }
+    }
+}
+
+impl DatabaseErrorInformation for GeneratedValueMismatch {
+    fn message(&self) -> &'static str {
+        "Generated column given a value other than its constant"
+    }
+
+    fn details(&self) -> Option<&str> {
+        None
+    }
+
+    fn hint(&self) -> Option<&str> {
+        None
+    }
+
+    fn table_name(&self) -> Option<&str> {
+        Some(self.table_name)
+    }
+
+    fn column_name(&self) -> Option<&str> {
+        Some(self.column_name)
+    }
+
+    fn constraint_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn statement_position(&self) -> Option<i32> {
+        None
+    }
 }
 
 /// A specialized `Result` type for builder operations.

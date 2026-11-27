@@ -20,11 +20,24 @@ use diesel::{
 
 use crate::TypedColumn;
 
+/// How an insert treats a column of a table's new record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InsertPolicy {
+    /// The builder must hold a value, which the insert writes.
+    Required,
+    /// The insert writes the value when the builder holds one, and otherwise
+    /// leaves the column out so the database supplies it.
+    DatabaseDefault,
+    /// The database generates the column as a constant, which the builder
+    /// holds so a primary key including it is known before the insert, and
+    /// which the insert never writes.
+    Generated,
+}
+
 /// A column of a table's new record.
 pub trait NewRecordColumn: TypedColumn {
-    /// Whether the database supplies the column when an `INSERT` leaves it
-    /// out, which makes the column optional in the builder.
-    const DATABASE_DEFAULT: bool;
+    /// How an insert treats the column.
+    const INSERT_POLICY: InsertPolicy;
 }
 
 /// The value an insert writes into column `C`, absent when the builder holds
@@ -159,18 +172,20 @@ pub(crate) trait NewRecordColumns {
 type ColumnExpression<C> =
     AsExprOf<<C as crate::ColumnTyped>::ColumnType, <C as Expression>::SqlType>;
 
-/// Converts the value a builder holds for column `C` into its insert value.
+/// Converts the value a builder holds for column `C` into its insert value,
+/// absent for a column the database generates.
 fn column_value<C>(value: Option<C::ColumnType>) -> ColumnValue<C, ColumnExpression<C>>
 where
     C: NewRecordColumn<ColumnType: AsExpression<C::SqlType>> + Expression<SqlType: SingleValue>,
 {
+    let value = value.filter(|_| C::INSERT_POLICY != InsertPolicy::Generated);
     ColumnValue { value: value.map(AsExpression::as_expression), column: PhantomData }
 }
 
 /// Returns the name of `C` when it holds no value and the database does not
 /// supply it.
 fn missing_column<C: NewRecordColumn>(value: Option<&C::ColumnType>) -> Option<&'static str> {
-    (value.is_none() && !C::DATABASE_DEFAULT).then_some(C::NAME)
+    (value.is_none() && C::INSERT_POLICY != InsertPolicy::DatabaseDefault).then_some(C::NAME)
 }
 
 impl<C> NewRecordColumns for (C,)

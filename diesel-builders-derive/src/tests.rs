@@ -601,6 +601,55 @@ struct G {
     );
 }
 
+/// A generated primary key column without a constant is rejected while the
+/// same column holding a constant expands.
+#[test]
+fn generated_primary_key_without_constant_is_rejected() {
+    invalid_is_rejected_and_counterpart_expands(
+        r"
+#[diesel(primary_key(namespace_id, id))]
+struct G {
+    #[table_model(generated)]
+    namespace_id: i32,
+    id: i32,
+}
+",
+        r"
+#[diesel(primary_key(namespace_id, id))]
+struct G {
+    #[table_model(generated = 7)]
+    namespace_id: i32,
+    id: i32,
+}
+",
+        "G",
+    );
+}
+
+/// A surrogate primary key holding a generated constant is rejected while the
+/// plain surrogate key expands.
+#[test]
+fn surrogate_primary_key_with_generated_constant_is_rejected() {
+    invalid_is_rejected_and_counterpart_expands(
+        r"
+#[table_model(surrogate_key)]
+struct G {
+    #[table_model(generated = 7)]
+    id: i32,
+    name: String,
+}
+",
+        r"
+#[table_model(surrogate_key)]
+struct G {
+    id: i32,
+    name: String,
+}
+",
+        "G",
+    );
+}
+
 /// A generated column carrying an attribute that needs a builder setter, or a
 /// second `generated` marker, is rejected while the bare generated column
 /// expands.

@@ -33,9 +33,9 @@ use std::collections::HashMap;
 use accumulated_traits::generate_accumulated_traits;
 use attribute_parsing::{
     extract_diesel_attributes, extract_discretionary_table, extract_field_default_value,
-    extract_mandatory_table, extract_same_as_columns, extract_table_model_attributes,
-    is_field_database_default, is_field_discretionary, is_field_generated, is_field_infallible,
-    is_field_mandatory, validate_field_attributes,
+    extract_generated_value, extract_mandatory_table, extract_same_as_columns,
+    extract_table_model_attributes, is_field_database_default, is_field_discretionary,
+    is_field_generated, is_field_infallible, is_field_mandatory, validate_field_attributes,
 };
 use foreign_keys::{
     generate_explicit_foreign_key_impls, generate_foreign_key_impls,
@@ -75,6 +75,83 @@ struct ProcessedFields {
     new_record_column_impls: Vec<proc_macro2::TokenStream>,
     /// Warnings to be emitted.
     warnings: Vec<proc_macro2::TokenStream>,
+    /// `NewRecordColumn` and `ValidateColumn` impls of each column declared
+    /// `#[table_model(generated = <value>)]`.
+    generated_value_impls: Vec<proc_macro2::TokenStream>,
+}
+
+/// Generates the impls of a column declared `#[table_model(generated =
+/// <value>)]`. The new values hold the constant from the start, so they carry
+/// the full primary key, the insert never writes it, and only the constant
+/// validates.
+fn constant_generated_column_impls(
+    column: &syn::Path,
+    value: &syn::Expr,
+    table_module: &syn::Ident,
+) -> TokenStream {
+    quote! {
+        impl ::diesel_builders::NewRecordColumn for #column {
+            const INSERT_POLICY: ::diesel_builders::InsertPolicy =
+                ::diesel_builders::InsertPolicy::Generated;
+        }
+
+        impl ::diesel_builders::ValidateColumn<#column>
+            for <#table_module::table as ::diesel_builders::TableExt>::NewValues
+        {
+            type Error = ::diesel_builders::GeneratedValueMismatch;
+
+            #[inline]
+            fn validate_column(
+                value: &<#column as ::diesel_builders::ValueTyped>::ValueType,
+            ) -> Result<(), Self::Error> {
+                let expected: <#column as ::diesel_builders::ColumnTyped>::ColumnType =
+                    (#value).to_owned().into();
+                ::diesel_builders::GeneratedValueMismatch::check::<#column>(&expected, value)
+            }
+        }
+    }
+}
+
+/// Rejects the attributes a primary key column cannot carry. A generated key
+/// column must hold a constant, given as `has_generated_value`, so the builder
+/// knows the whole key before the insert.
+fn check_primary_key_field(
+    field: &syn::Field,
+    has_generated_value: bool,
+    attributes: &attribute_parsing::TableModelAttributes,
+) -> syn::Result<()> {
+    if is_field_generated(field) && (!has_generated_value || attributes.surrogate_key) {
+        return Err(syn::Error::new_spanned(
+            field,
+            "A primary key column cannot be `#[table_model(generated)]` unless it holds a \
+             constant given as `#[table_model(generated = <value>)]`, mark a \
+             database-assigned key with `#[table_model(surrogate_key)]` instead",
+        ));
+    }
+
+    if is_field_database_default(field) {
+        return Err(syn::Error::new_spanned(
+            field,
+            "A primary key column cannot be `#[table_model(database_default)]`, \
+             mark a database-assigned key with `#[table_model(surrogate_key)]` instead",
+        ));
+    }
+
+    if extract_field_default_value(field).is_some() && attributes.surrogate_key {
+        return Err(syn::Error::new_spanned(
+            field,
+            "Surrogate primary key cannot have a `default` value",
+        ));
+    }
+
+    if is_field_infallible(field) && attributes.surrogate_key {
+        return Err(syn::Error::new_spanned(
+            field,
+            "Surrogate primary key cannot be marked as `#[infallible]`",
+        ));
+    }
+
+    Ok(())
 }
 
 /// Process fields to extract columns, validation status, and default values.
@@ -91,6 +168,7 @@ fn process_fields(
     let mut empty_values = Vec::new();
     let mut new_record_column_impls = Vec::new();
     let mut warnings = Vec::new();
+    let mut generated_value_impls = Vec::new();
 
     for field in fields {
         let field_name = field
@@ -107,44 +185,34 @@ fn process_fields(
 
         // Check if field is a primary key
         let is_pk = primary_key_columns.iter().any(|pk| pk == field_name);
+        let generated_value = extract_generated_value(field);
 
         if is_pk {
-            if is_field_generated(field) {
-                return Err(syn::Error::new_spanned(
-                    field,
-                    "A primary key column cannot be `#[table_model(generated)]`, \
-                     mark a database-assigned key with `#[table_model(surrogate_key)]` instead",
-                ));
-            }
-
-            if is_field_database_default(field) {
-                return Err(syn::Error::new_spanned(
-                    field,
-                    "A primary key column cannot be `#[table_model(database_default)]`, \
-                     mark a database-assigned key with `#[table_model(surrogate_key)]` instead",
-                ));
-            }
-
-            if extract_field_default_value(field).is_some() && attributes.surrogate_key {
-                return Err(syn::Error::new_spanned(
-                    field,
-                    "Surrogate primary key cannot have a `default` value",
-                ));
-            }
-
-            if is_field_infallible(field) && attributes.surrogate_key {
-                return Err(syn::Error::new_spanned(
-                    field,
-                    "Surrogate primary key cannot be marked as `#[infallible]`",
-                ));
-            }
+            check_primary_key_field(field, generated_value.is_some(), attributes)?;
         }
 
-        if (is_pk && attributes.surrogate_key) || is_field_generated(field) {
+        if (is_pk && attributes.surrogate_key)
+            || (is_field_generated(field) && generated_value.is_none())
+        {
             continue;
         }
 
-        new_record_columns.push(syn::parse_quote!(#table_module::#field_name));
+        let column: syn::Path = syn::parse_quote!(#table_module::#field_name);
+
+        if let Some(value) = generated_value {
+            let constant = quote::quote! { Some((#value).to_owned().into()) };
+            default_values.push(constant.clone());
+            empty_values.push(constant);
+            generated_value_impls.push(constant_generated_column_impls(
+                &column,
+                &value,
+                table_module,
+            ));
+            new_record_columns.push(column);
+            continue;
+        }
+
+        new_record_columns.push(column);
 
         if is_field_infallible(field) && attributes.error.is_none() {
             warnings.push(redundant_infallible_warning(field, field_name));
@@ -161,10 +229,15 @@ fn process_fields(
 
         empty_values.push(field_empty_value(field));
 
-        let database_default = is_field_database_default(field);
+        let insert_policy = if is_field_database_default(field) {
+            quote! { DatabaseDefault }
+        } else {
+            quote! { Required }
+        };
         new_record_column_impls.push(quote! {
             impl ::diesel_builders::NewRecordColumn for #table_module::#field_name {
-                const DATABASE_DEFAULT: bool = #database_default;
+                const INSERT_POLICY: ::diesel_builders::InsertPolicy =
+                    ::diesel_builders::InsertPolicy::#insert_policy;
             }
         });
     }
@@ -177,6 +250,7 @@ fn process_fields(
         empty_values,
         new_record_column_impls,
         warnings,
+        generated_value_impls,
     })
 }
 
@@ -444,6 +518,7 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
         empty_values,
         new_record_column_impls,
         warnings,
+        generated_value_impls,
     } = process_fields(fields, &table_module, &primary_key_columns, &attributes)?;
 
     // Collect triangular relation columns for BundlableTable implementation
@@ -724,6 +799,7 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
         #(#new_record_column_impls)*
         #validate_record_impl
         #infallible_validate_column_impls
+        #(#generated_value_impls)*
         #descendant_impls
         #bundlable_table_impl
         #buildable_table_impl
