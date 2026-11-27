@@ -84,37 +84,6 @@ pub(crate) trait InsertBundle<Conn>: HasTableExt {
     ) -> BuilderResult<PrimaryKeyValues<Self::Table>, Self::ValidationError>;
 }
 
-/// A borrowed view of stored column options, used to check completeness
-/// without moving the stored values.
-pub(crate) trait CheckNestedStoredOptions<H> {
-    /// The parallel nested tuple of column names.
-    type SameDepth;
-
-    /// Returns the name of the first absent column, if any.
-    fn first_missing_with(self, names: Self::SameDepth) -> Option<H>;
-}
-
-impl<T, H> CheckNestedStoredOptions<H> for (&Option<T>,) {
-    type SameDepth = (H,);
-
-    #[inline]
-    fn first_missing_with(self, names: (H,)) -> Option<H> {
-        if self.0.is_some() { None } else { Some(names.0) }
-    }
-}
-
-impl<Head, Tail, H> CheckNestedStoredOptions<H> for (&Option<Head>, Tail)
-where
-    Tail: CheckNestedStoredOptions<H>,
-{
-    type SameDepth = (H, Tail::SameDepth);
-
-    #[inline]
-    fn first_missing_with(self, names: (H, Tail::SameDepth)) -> Option<H> {
-        if self.0.is_some() { self.1.first_missing_with(names.1) } else { Some(names.0) }
-    }
-}
-
 /// Stores one table's generated primary key columns into a descendant
 /// builder, retaining each column's exact validation error.
 pub(crate) trait SetTableKeyColumns<CS: NestedColumns> {

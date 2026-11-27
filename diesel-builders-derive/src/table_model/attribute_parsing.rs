@@ -217,6 +217,12 @@ pub fn is_field_generated(field: &syn::Field) -> bool {
     count_nested_attribute(field, "generated") > 0
 }
 
+/// Check if a field is a column whose value the database supplies when an
+/// insert leaves it out, marked via `#[table_model(database_default)]`.
+pub fn is_field_database_default(field: &syn::Field) -> bool {
+    count_nested_attribute(field, "database_default") > 0
+}
+
 /// Check if a field is marked as mandatory via `#[mandatory(...)]`.
 pub fn is_field_mandatory(field: &syn::Field) -> bool {
     field.attrs.iter().any(|attr| attr.path().is_ident("mandatory"))
@@ -394,36 +400,7 @@ pub fn validate_field_attributes(field: &syn::Field) -> syn::Result<()> {
         ));
     }
 
-    if count_nested_attribute(field, "generated") > 1 {
-        return Err(syn::Error::new_spanned(
-            field,
-            "Duplicate `#[table_model(generated)]` attribute found",
-        ));
-    }
-
-    if is_field_generated(field) {
-        let conflict = if is_field_mandatory(field) {
-            Some("#[mandatory(...)]")
-        } else if is_field_discretionary(field) {
-            Some("#[discretionary(...)]")
-        } else if count_attribute(field, "same_as") > 0 {
-            Some("#[same_as(...)]")
-        } else if count_nested_attribute(field, "default") > 0 {
-            Some("#[table_model(default = ...)]")
-        } else if count_infallible_markers(field) > 0 {
-            Some("#[infallible]")
-        } else {
-            None
-        };
-        if let Some(conflict) = conflict {
-            return Err(syn::Error::new_spanned(
-                field,
-                format!(
-                    "A `#[table_model(generated)]` column has no builder setter, so it cannot also carry `{conflict}`"
-                ),
-            ));
-        }
-    }
+    validate_database_column_markers(field)?;
 
     // Check for unsupported diesel attributes
     for attr in &field.attrs {
@@ -463,6 +440,72 @@ pub fn validate_field_attributes(field: &syn::Field) -> syn::Result<()> {
                     "Expected `#[same_as(ancestor::column)]` with parentheses",
                 ));
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Rejects a `generated` or `database_default` column that repeats its marker
+/// or also carries an attribute giving the builder a value for it.
+fn validate_database_column_markers(field: &syn::Field) -> syn::Result<()> {
+    if count_nested_attribute(field, "generated") > 1 {
+        return Err(syn::Error::new_spanned(
+            field,
+            "Duplicate `#[table_model(generated)]` attribute found",
+        ));
+    }
+
+    if count_nested_attribute(field, "database_default") > 1 {
+        return Err(syn::Error::new_spanned(
+            field,
+            "Duplicate `#[table_model(database_default)]` attribute found",
+        ));
+    }
+
+    if is_field_generated(field) {
+        let conflict = if is_field_mandatory(field) {
+            Some("#[mandatory(...)]")
+        } else if is_field_discretionary(field) {
+            Some("#[discretionary(...)]")
+        } else if count_attribute(field, "same_as") > 0 {
+            Some("#[same_as(...)]")
+        } else if count_nested_attribute(field, "default") > 0 {
+            Some("#[table_model(default = ...)]")
+        } else if is_field_database_default(field) {
+            Some("#[table_model(database_default)]")
+        } else if count_infallible_markers(field) > 0 {
+            Some("#[infallible]")
+        } else {
+            None
+        };
+        if let Some(conflict) = conflict {
+            return Err(syn::Error::new_spanned(
+                field,
+                format!(
+                    "A `#[table_model(generated)]` column has no builder setter, so it cannot also carry `{conflict}`"
+                ),
+            ));
+        }
+    }
+
+    if is_field_database_default(field) {
+        let conflict = if is_field_mandatory(field) {
+            Some("#[mandatory(...)]")
+        } else if is_field_discretionary(field) {
+            Some("#[discretionary(...)]")
+        } else if count_nested_attribute(field, "default") > 0 {
+            Some("#[table_model(default = ...)]")
+        } else {
+            None
+        };
+        if let Some(conflict) = conflict {
+            return Err(syn::Error::new_spanned(
+                field,
+                format!(
+                    "A `#[table_model(database_default)]` column holds no value until it is set, so it cannot also carry `{conflict}`"
+                ),
+            ));
         }
     }
 

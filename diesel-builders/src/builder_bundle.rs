@@ -32,12 +32,7 @@ pub trait BundlableTable: Sized {
 }
 
 /// Extension trait for [`BundlableTable`].
-pub trait BundlableTableExt:
-    BundlableTable + TableExt<NewValues: NestedTupleOption<Transposed = Self::CompletedNewValues>>
-{
-    /// The completed new values ready to be inserted for the table.
-    type CompletedNewValues: FlattenNestedTuple
-        + IntoNestedTupleOption<IntoOptions = Self::NewValues>;
+pub trait BundlableTableExt: BundlableTable + TableExt {
     /// Nested mandatory triangular same-as columns.
     type NestedMandatoryTriangularColumns: NestedColumns<
         NestedTupleColumnType = Self::NestedMandatoryPrimaryKeyTypes,
@@ -91,7 +86,6 @@ impl<T> BundlableTableExt for T
 where
     T: BundlableTable + TableExt,
 {
-    type CompletedNewValues = <T::NewRecord as TypedNestedTuple>::NestedTupleColumnType;
     type NestedMandatoryTriangularColumns = <T::MandatoryTriangularColumns as NestTuple>::Nested;
     type NestedMandatoryTables =
         <Self::NestedMandatoryTriangularColumns as HorizontalNestedKeys<T>>::NestedReferencedTables;

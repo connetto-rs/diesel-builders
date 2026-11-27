@@ -34,8 +34,8 @@ use accumulated_traits::generate_accumulated_traits;
 use attribute_parsing::{
     extract_diesel_attributes, extract_discretionary_table, extract_field_default_value,
     extract_mandatory_table, extract_same_as_columns, extract_table_model_attributes,
-    is_field_discretionary, is_field_generated, is_field_infallible, is_field_mandatory,
-    validate_field_attributes,
+    is_field_database_default, is_field_discretionary, is_field_generated, is_field_infallible,
+    is_field_mandatory, validate_field_attributes,
 };
 use foreign_keys::{
     generate_explicit_foreign_key_impls, generate_foreign_key_impls,
@@ -71,6 +71,8 @@ struct ProcessedFields {
     default_columns: Vec<syn::Path>,
     /// Empty-state values for the new record tuple.
     empty_values: Vec<proc_macro2::TokenStream>,
+    /// `NewRecordColumn` implementations of the new record columns.
+    new_record_column_impls: Vec<proc_macro2::TokenStream>,
     /// Warnings to be emitted.
     warnings: Vec<proc_macro2::TokenStream>,
 }
@@ -87,6 +89,7 @@ fn process_fields(
     let mut default_values = Vec::new();
     let mut default_columns = Vec::new();
     let mut empty_values = Vec::new();
+    let mut new_record_column_impls = Vec::new();
     let mut warnings = Vec::new();
 
     for field in fields {
@@ -110,6 +113,14 @@ fn process_fields(
                 return Err(syn::Error::new_spanned(
                     field,
                     "A primary key column cannot be `#[table_model(generated)]`, \
+                     mark a database-assigned key with `#[table_model(surrogate_key)]` instead",
+                ));
+            }
+
+            if is_field_database_default(field) {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "A primary key column cannot be `#[table_model(database_default)]`, \
                      mark a database-assigned key with `#[table_model(surrogate_key)]` instead",
                 ));
             }
@@ -149,6 +160,13 @@ fn process_fields(
         }
 
         empty_values.push(field_empty_value(field));
+
+        let database_default = is_field_database_default(field);
+        new_record_column_impls.push(quote! {
+            impl ::diesel_builders::NewRecordColumn for #table_module::#field_name {
+                const DATABASE_DEFAULT: bool = #database_default;
+            }
+        });
     }
 
     Ok(ProcessedFields {
@@ -157,6 +175,7 @@ fn process_fields(
         default_values,
         default_columns,
         empty_values,
+        new_record_column_impls,
         warnings,
     })
 }
@@ -423,6 +442,7 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
         default_values,
         default_columns,
         empty_values,
+        new_record_column_impls,
         warnings,
     } = process_fields(fields, &table_module, &primary_key_columns, &attributes)?;
 
@@ -701,6 +721,7 @@ pub fn derive_table_model_impl(input: &DeriveInput) -> syn::Result<TokenStream> 
         #may_get_column_impls
         #set_column_impls
         #take_column_impls
+        #(#new_record_column_impls)*
         #validate_record_impl
         #infallible_validate_column_impls
         #descendant_impls
@@ -1257,22 +1278,19 @@ fn generate_horizontal_key_impls(
 /// tuple: a user default if present, `Some(None)` for nullable columns, or
 /// `None` otherwise.
 fn field_default_value(field: &syn::Field) -> TokenStream {
-    let user_default = extract_field_default_value(field);
-    let is_nullable = is_option(&field.ty);
-    if let Some(def) = user_default {
+    if let Some(def) = extract_field_default_value(field) {
         quote::quote! { Some((#def).to_owned().into()) }
-    } else if is_nullable {
-        quote::quote! { Some(None) }
     } else {
-        quote::quote! { None }
+        field_empty_value(field)
     }
 }
 
 /// Computes the empty-state value expression for a field's slot in the
 /// new-record tuple: `Some(None)` for nullable columns and `None` otherwise,
-/// without applying any explicit defaults.
+/// without applying any explicit defaults. A database-default column stays
+/// `None` even when nullable, so the insert leaves it out.
 fn field_empty_value(field: &syn::Field) -> TokenStream {
-    if is_option(&field.ty) {
+    if is_option(&field.ty) && !is_field_database_default(field) {
         quote::quote! { Some(None) }
     } else {
         quote::quote! { None }

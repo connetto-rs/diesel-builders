@@ -5,16 +5,13 @@
 //! policies can make a row visible only once the rows of other tables exist,
 //! so a row read right after its own insert may not be visible yet.
 
-use diesel::{Insertable, RunQueryDsl, query_builder::InsertStatement, query_dsl::LoadQuery};
-use tuplities::prelude::{
-    FlattenNestedTuple, IntoNestedTupleOption, NestedTupleInto, NestedTupleOption,
-    NestedTupleOptionWith,
-};
+use diesel::{RunQueryDsl, query_dsl::LoadQuery};
+use tuplities::prelude::{IntoNestedTupleOption, NestedTupleInto, NestedTupleOption};
 
 use crate::{
     LoadQueryBuilder, MayGetNestedColumns, TableExt, TypedNestedTuple,
     builder_bundle::BundlableTableExt,
-    columns::{NestedColumns, TupleEqAll},
+    insert_row::{InsertRow, NewRecordColumns, Returning},
 };
 
 /// The key source of a table whose primary key the builder holds before the
@@ -30,38 +27,24 @@ pub struct SurrogateKey;
 pub(crate) type PrimaryKeyValues<T> =
     <<T as TableExt>::NestedPrimaryKeyColumns as TypedNestedTuple>::NestedTupleColumnType;
 
-/// A table whose complete new values convert into a Diesel insertable.
+/// A table whose new values convert into the row an insert writes.
 pub(crate) trait InsertValues: BundlableTableExt {
-    /// The insertable the new values convert into.
-    type Values: Insertable<Self>;
+    /// The row an insert writes.
+    type Row;
 
-    /// Converts new values holding every column of the new record.
-    ///
-    /// # Panics
-    ///
-    /// Panics when a column of the new record is missing, which callers rule
-    /// out before converting.
-    fn insert_values(new_values: Self::NewValues) -> Self::Values;
+    /// Converts new values that hold every column the database does not
+    /// supply into the insert of their row.
+    fn insert_row(new_values: Self::NewValues) -> InsertRow<Self, Self::Row>;
 }
 
 impl<T> InsertValues for T
 where
-    T: BundlableTableExt,
-    T::NewRecord: TupleEqAll<EqAll: FlattenNestedTuple<Flattened: Insertable<T>>>
-        + TypedNestedTuple<NestedTupleColumnType = T::CompletedNewValues>,
+    T: BundlableTableExt<NewRecord: NewRecordColumns<Values = T::NewValues>>,
 {
-    type Values = <<T::NewRecord as TupleEqAll>::EqAll as FlattenNestedTuple>::Flattened;
+    type Row = <T::NewRecord as NewRecordColumns>::Row;
 
-    fn insert_values(new_values: Self::NewValues) -> Self::Values {
-        #[expect(
-            clippy::expect_used,
-            reason = "callers check that every column of the new record is present before \
-                      converting, so transpose_or cannot observe a missing column here"
-        )]
-        let values: T::CompletedNewValues = new_values
-            .transpose_or(T::NewRecord::NESTED_COLUMN_NAMES)
-            .expect("every required column was already proven present");
-        T::NewRecord::default().eq_all(values).flatten()
+    fn insert_row(new_values: Self::NewValues) -> InsertRow<Self, Self::Row> {
+        InsertRow::new(T::NewRecord::row(new_values))
     }
 }
 
@@ -87,8 +70,7 @@ where
     T::NewValues: MayGetNestedColumns<T::NestedPrimaryKeyColumns>,
     <PrimaryKeyValues<T> as IntoNestedTupleOption>::IntoOptions:
         NestedTupleOption<Transposed = PrimaryKeyValues<T>>,
-    InsertStatement<T, <T::Values as Insertable<T>>::Values>:
-        diesel::query_dsl::methods::ExecuteDsl<Conn>,
+    InsertRow<T, T::Row>: diesel::query_dsl::methods::ExecuteDsl<Conn>,
     Conn: diesel::Connection,
 {
     fn write_row(
@@ -98,14 +80,15 @@ where
         #[expect(
             clippy::expect_used,
             reason = "the primary key columns of a table without a surrogate key belong to its \
-                      new record, which callers check is complete before writing"
+                      new record and cannot be database defaults, and callers check that such \
+                      columns are present before writing"
         )]
         let key = <T::NewValues as MayGetNestedColumns<T::NestedPrimaryKeyColumns>>::may_get_nested_columns(
             &new_values,
         )
         .transpose()
         .expect("every primary key column was already proven present");
-        diesel::insert_into(T::default()).values(T::insert_values(new_values)).execute(conn)?;
+        T::insert_row(new_values).execute(conn)?;
         Ok(key)
     }
 }
@@ -114,19 +97,14 @@ where
 impl<Conn, T> WriteRow<Conn, T> for SurrogateKey
 where
     T: InsertValues,
-    diesel::dsl::Returning<
-        InsertStatement<T, <T::Values as Insertable<T>>::Values>,
-        T::NestedPrimaryKeyColumns,
-    >: diesel::query_builder::Query + for<'query> LoadQuery<'query, Conn, PrimaryKeyValues<T>>,
+    InsertRow<T, T::Row, Returning<T::NestedPrimaryKeyColumns>>:
+        for<'query> LoadQuery<'query, Conn, PrimaryKeyValues<T>>,
 {
     fn write_row(
         new_values: T::NewValues,
         conn: &mut Conn,
     ) -> diesel::QueryResult<PrimaryKeyValues<T>> {
-        diesel::insert_into(T::default())
-            .values(T::insert_values(new_values))
-            .returning(T::NestedPrimaryKeyColumns::default())
-            .get_result(conn)
+        T::insert_row(new_values).returning(T::NestedPrimaryKeyColumns::default()).get_result(conn)
     }
 }
 
@@ -185,14 +163,13 @@ pub(crate) trait InsertStoredRow<Conn, T: InsertValues> {
 impl<Conn, T> InsertStoredRow<Conn, T> for diesel::pg::Pg
 where
     T: InsertValues,
-    InsertStatement<T, <T::Values as Insertable<T>>::Values>:
-        for<'query> LoadQuery<'query, Conn, T::Model>,
+    InsertRow<T, T::Row, Returning<T::AllColumns>>: for<'query> LoadQuery<'query, Conn, T::Model>,
 {
     fn insert_stored_row(
         new_values: T::NewValues,
         conn: &mut Conn,
     ) -> diesel::QueryResult<T::Model> {
-        diesel::insert_into(T::default()).values(T::insert_values(new_values)).get_result(conn)
+        T::insert_row(new_values).returning(<T as diesel::Table>::all_columns()).get_result(conn)
     }
 }
 
