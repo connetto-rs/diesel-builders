@@ -626,6 +626,56 @@ fn generated_column_with_setter_attribute_is_rejected() {
     }
 }
 
+/// A database-default primary key is rejected while the same column outside
+/// the primary key expands.
+#[test]
+fn database_default_primary_key_is_rejected() {
+    invalid_is_rejected_and_counterpart_expands(
+        r"
+struct D {
+    #[table_model(database_default)]
+    id: i32,
+    name: String,
+}
+",
+        r"
+struct D {
+    id: i32,
+    #[table_model(database_default)]
+    name: String,
+}
+",
+        "D",
+    );
+}
+
+/// A database-default column carrying an attribute that gives it a value
+/// before it is set, or a second marker, is rejected while the bare marker
+/// expands.
+#[test]
+fn database_default_column_with_value_attribute_is_rejected() {
+    let conflicts = [
+        "#[table_model(database_default)] #[table_model(database_default)]",
+        "#[table_model(database_default, default = 3)]",
+        "#[table_model(default = 3, database_default)]",
+        "#[table_model(database_default, generated)]",
+        "#[table_model(database_default)] #[mandatory(sides)]",
+        "#[table_model(database_default)] #[discretionary(sides)]",
+    ];
+    expansion_is_valid_rust(
+        "struct D { id: i32, #[table_model(database_default)] size: i32 }",
+        "D",
+    );
+    for conflict in conflicts {
+        let error = run_derive(&format!("struct D {{ id: i32, {conflict} size: i32 }}"))
+            .expect_err("expected the conflicting database-default column to be rejected");
+        assert!(
+            error.to_string().contains("database_default"),
+            "`{conflict}` was rejected for another reason: {error}"
+        );
+    }
+}
+
 /// A struct without named fields is rejected while the accepted counterpart
 /// expands.
 #[test]

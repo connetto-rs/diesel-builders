@@ -65,8 +65,9 @@ pub trait TableExt:
     #[must_use]
     fn default_new_values() -> Self::NewValues;
 
-    /// Returns new-record values without any explicit defaults: mandatory
-    /// values stay absent and nullable values are initialized to null.
+    /// Returns new-record values without any explicit defaults: mandatory and
+    /// database-default values stay absent and other nullable values are
+    /// initialized to null.
     ///
     /// ```
     /// # include!("doctest_setup.rs");

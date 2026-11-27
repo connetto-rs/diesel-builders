@@ -21,6 +21,8 @@ Builders insert through the `sqlite` or `postgres` feature, whichever matches th
 
 Columns the database computes, such as `GENERATED ALWAYS AS (...) STORED`, are marked [`#[table_model(generated)]`](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_generated_columns.rs). Builders have no setter for them, inserts and upserts never write them, and the returned model holds the computed values.
 
+Columns the database fills from their SQL `DEFAULT` are marked [`#[table_model(database_default)]`](https://github.com/connetto-rs/diesel-builders/blob/main/diesel-builders/tests/test_database_default_columns.rs). The builder holds no value for such a column until a setter, a `same_as` propagation or an ancestor default fills it, and the `INSERT` leaves the column out until then, so a role without `INSERT` privilege on it can still insert the row. The returned model holds the stored value.
+
 The `TableModel` derive macro generates Diesel's [`table!`](https://docs.rs/diesel/latest/diesel/macro.table.html) macro, eliminating manual schema definitions. Query groups are declared explicitly with [`diesel::allow_tables_to_appear_in_same_query!`](https://docs.rs/diesel/latest/diesel/macro.allow_tables_to_appear_in_same_query.html) after the related `TableModel` definitions, covering every pair of tables that appears together in a Diesel query.
 
 ## Supported Patterns

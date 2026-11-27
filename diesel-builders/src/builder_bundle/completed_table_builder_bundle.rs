@@ -11,7 +11,8 @@ use crate::{
     TrySetValues, TypedColumn, ValidateColumn, ValidateRecord,
     builder_bundle::{BundlableTableExt, impl_bundle_shared},
     horizontal_same_as_group::HorizontalSameAsGroupExt,
-    insert_transaction::{CheckNestedStoredOptions, InsertBuilder, InsertBundle},
+    insert_row::NewRecordColumns,
+    insert_transaction::{InsertBuilder, InsertBundle},
     stored_row_insert::{InsertStoredRow, InsertValues, PrimaryKeyValues, WriteRow},
 };
 
@@ -190,12 +191,8 @@ where
     T: BundlableTableExt,
     T::NewValues: TrySetValues<T::NestedMandatoryTriangularColumns>
         + TryMaySetValues<T::NestedDiscretionaryTriangularColumns>
-        + ValidateRecord<T>
-        + NestedTupleRef,
-    for<'a> <T::NewValues as NestedTupleRef>::Ref<'a>: CheckNestedStoredOptions<
-            &'static str,
-            SameDepth = <T::NewRecord as NestedColumns>::NestedNames,
-        >,
+        + ValidateRecord<T>,
+    T::NewRecord: NewRecordColumns<Values = T::NewValues>,
     T::MandatoryNestedBuilders: InsertTuple<
             Conn,
             Keys = T::NestedMandatoryPrimaryKeyTypes,
@@ -244,11 +241,7 @@ where
 
         // Check the required fields without moving the stored values, so that
         // the record validator observes the complete final values.
-        if let Some(column_name) = self
-            .insertable_model
-            .nested_tuple_ref()
-            .first_missing_with(T::NewRecord::NESTED_COLUMN_NAMES)
-        {
+        if let Some(column_name) = T::NewRecord::first_missing(&self.insertable_model) {
             return Err(BuilderError::Incomplete(IncompleteBuilderError::MissingMandatoryField {
                 table_name: T::TABLE_NAME,
                 field_name: column_name,
