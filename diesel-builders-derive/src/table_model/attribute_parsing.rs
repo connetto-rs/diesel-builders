@@ -212,7 +212,7 @@ pub fn is_field_infallible(field: &syn::Field) -> bool {
 }
 
 /// Check if a field is a column the database generates, marked via
-/// `#[table_model(generated)]`.
+/// `#[table_model(generated)]` or `#[table_model(generated = <value>)]`.
 pub fn is_field_generated(field: &syn::Field) -> bool {
     count_nested_attribute(field, "generated") > 0
 }
@@ -221,6 +221,27 @@ pub fn is_field_generated(field: &syn::Field) -> bool {
 /// insert leaves it out, marked via `#[table_model(database_default)]`.
 pub fn is_field_database_default(field: &syn::Field) -> bool {
     count_nested_attribute(field, "database_default") > 0
+}
+
+/// Extract the constant a generated column always holds, from
+/// `#[table_model(generated = <value>)]`.
+pub fn extract_generated_value(field: &syn::Field) -> Option<syn::Expr> {
+    let mut generated_value = None;
+    for attr in &field.attrs {
+        if !attr.path().is_ident("table_model") {
+            continue;
+        }
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.input.peek(syn::Token![=]) {
+                let expr: syn::Expr = meta.value()?.parse()?;
+                if meta.path.is_ident("generated") {
+                    generated_value = Some(expr);
+                }
+            }
+            Ok(())
+        });
+    }
+    generated_value
 }
 
 /// Check if a field is marked as mandatory via `#[mandatory(...)]`.
